@@ -1,0 +1,129 @@
+{
+  "projectType": "framework",
+  "projectName": "GRPG",
+  "projectDescription": "A high-performance MMO game engine focused on performance and developer experience",
+  "theme": "aspen",
+  "primaryColor": "#8B4513",
+  "lightColor": "#CD853F",
+  "darkColor": "#5C2E0A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Components",
+            "pages": [
+              "components/server",
+              "components/client",
+              "components/data-formats",
+              "components/networking"
+            ]
+          },
+          {
+            "group": "Development Tools",
+            "pages": [
+              "tools/data-packer",
+              "tools/map-editor",
+              "tools/assets-server"
+            ]
+          },
+          {
+            "group": "Game Systems",
+            "pages": [
+              "systems/content-scripting",
+              "systems/npcs",
+              "systems/objects",
+              "systems/inventories",
+              "systems/skills"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-content",
+              "guides/custom-objects",
+              "guides/map-creation",
+              "guides/asset-pipeline"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Data Formats",
+            "pages": [
+              "api/gbuf",
+              "api/grpgtex",
+              "api/grpgtile",
+              "api/grpgobj",
+              "api/grpgnpc",
+              "api/grpgitem",
+              "api/grpgmap"
+            ]
+          },
+          {
+            "group": "Server API",
+            "pages": [
+              "api/server/game-state",
+              "api/server/scripts",
+              "api/server/network-handlers"
+            ]
+          },
+          {
+            "group": "Client API",
+            "pages": [
+              "api/client/game-loop",
+              "api/client/rendering",
+              "api/client/network"
+            ]
+          },
+          {
+            "group": "CLI Tools",
+            "pages": [
+              "api/cli/data-packer-commands"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Custom MMO networking protocol with efficient binary serialization",
+    "Content scripting system for NPCs and interactive objects",
+    "Binary data formats optimized for game assets (textures, tiles, maps, NPCs, items)",
+    "Built-in GUI map editor for chunk-based world editing",
+    "Client-server architecture with Ebiten-powered game client",
+    "Data packer CLI for converting manifests to optimized binary formats",
+    "Player persistence with SQLite database and migrations",
+    "Real-time multiplayer with tick-based game loop",
+    "Inventory and skill system with XP progression"
+  ],
+  "publicApiSurface": [
+    "grpg/data-go/gbuf - Binary buffer reading/writing utilities",
+    "grpg/data-go/grpgtex - Texture format with JPEGXL compression",
+    "grpg/data-go/grpgtile - Tile data format",
+    "grpg/data-go/grpgobj - Object data format",
+    "grpg/data-go/grpgnpc - NPC data format",
+    "grpg/data-go/grpgitem - Item data format",
+    "grpg/data-go/grpgmap - Map/chunk data format",
+    "grpgpack tex - Pack textures from manifest",
+    "grpgpack tile - Pack tiles from manifest",
+    "grpgpack obj - Pack objects from manifest",
+    "grpgpack npc - Pack NPCs from manifest",
+    "grpgpack item - Pack items from manifest",
+    "server/scripts.OnObjInteract - Register object interaction handler",
+    "server/scripts.OnNpcTalk - Register NPC dialogue handler",
+    "server/scripts.SpawnNpc - Spawn NPC at coordinates"
+  ]
+}
