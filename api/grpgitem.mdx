@@ -1,0 +1,485 @@
+---
+title: "GRPGITEM Format"
+description: "Item definition binary format for GRPG inventory items"
+---
+
+## Overview
+
+GRPGITEM is the binary format for defining items in GRPG. Items represent objects that can be collected, carried in inventory, used, or traded. Each item has a unique identifier, a texture for display, and a name.
+
+## Binary Format Structure
+
+```
+[8 bytes: Magic Header "GRPGITEM"]
+[2 bytes: Item Count (uint16)]
+[Item Array:]
+  For each item:
+    [2 bytes: Item ID (uint16)]
+    [2 bytes: Texture ID (uint16)]
+    [4 bytes: Name Length (uint32)]
+    [N bytes: Name (UTF-8 string)]
+```
+
+## Type Definitions
+
+### Header
+
+```go
+type Header struct {
+    Magic [8]byte
+}
+```
+
+<ParamField path="Magic" type="[8]byte">
+  Magic number identifier: `"GRPGITEM"` (8 ASCII characters)
+</ParamField>
+
+### Item
+
+```go
+type Item struct {
+    ItemId  uint16
+    Texture uint16
+    Name    string
+}
+```
+
+<ParamField path="ItemId" type="uint16">
+  Unique identifier for this item type (0-65535)
+</ParamField>
+
+<ParamField path="Texture" type="uint16">
+  Reference to an icon texture in the GRPGTEX atlas by its InternalIdInt
+</ParamField>
+
+<ParamField path="Name" type="string">
+  Human-readable name of the item (e.g., "berries", "sword", "health_potion")
+</ParamField>
+
+## Functions
+
+### WriteHeader
+
+```go
+func WriteHeader(buf *gbuf.GBuf)
+```
+
+Writes the GRPGITEM magic header to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write the header to
+</ParamField>
+
+**Binary Output:**
+```
+[0x47, 0x52, 0x50, 0x47, 0x49, 0x54, 0x45, 0x4D]
+"G    R    P    G    I    T    E    M"
+```
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+grpgitem.WriteHeader(buf)
+```
+
+### ReadHeader
+
+```go
+func ReadHeader(buf *gbuf.GBuf) (Header, error)
+```
+
+Reads and validates the GRPGITEM header from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read the header from
+</ParamField>
+
+**Returns:**
+- `Header` - The parsed header structure
+- `error` - Error if insufficient data is available
+
+**Example:**
+```go
+data, _ := os.ReadFile("items.grpgitem")
+buf := gbuf.NewGBuf(data)
+header, err := grpgitem.ReadHeader(buf)
+if err != nil {
+    log.Fatal("Invalid GRPGITEM file")
+}
+```
+
+### WriteItems
+
+```go
+func WriteItems(buf *gbuf.GBuf, items []Item)
+```
+
+Writes an array of item definitions to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write items to
+</ParamField>
+
+<ParamField path="items" type="[]Item" required>
+  Array of item definitions to serialize
+</ParamField>
+
+**Binary Output Format:**
+```
+[2 bytes: uint16 count]
+For each item:
+  [2 bytes: uint16 item ID]
+  [2 bytes: uint16 texture ID]
+  [4 bytes: uint32 name length]
+  [N bytes: UTF-8 name]
+```
+
+**Example:**
+```go
+items := []grpgitem.Item{
+    {
+        ItemId:  1,
+        Texture: 3,
+        Name:    "berries",
+    },
+    {
+        ItemId:  2,
+        Texture: 4,
+        Name:    "health_potion",
+    },
+}
+
+buf := gbuf.NewEmptyGBuf()
+grpgitem.WriteHeader(buf)
+grpgitem.WriteItems(buf, items)
+
+os.WriteFile("items.grpgitem", buf.Bytes(), 0644)
+```
+
+### ReadItems
+
+```go
+func ReadItems(buf *gbuf.GBuf) ([]Item, error)
+```
+
+Reads an array of item definitions from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read items from (positioned after the header)
+</ParamField>
+
+**Returns:**
+- `[]Item` - Array of parsed item definitions
+- `error` - Error if data is malformed or incomplete
+
+**Example:**
+```go
+data, _ := os.ReadFile("items.grpgitem")
+buf := gbuf.NewGBuf(data)
+
+header, _ := grpgitem.ReadHeader(buf)
+items, err := grpgitem.ReadItems(buf)
+if err != nil {
+    log.Fatal("Failed to read items")
+}
+
+for _, item := range items {
+    fmt.Printf("Item %d: %s (Texture: %d)\n", item.ItemId, item.Name, item.Texture)
+}
+```
+
+## Complete Usage Example
+
+### Creating Item Definitions
+
+```go
+package main
+
+import (
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgitem"
+    "os"
+)
+
+func main() {
+    // Define items
+    items := []grpgitem.Item{
+        {
+            ItemId:  0,
+            Texture: 200, // References texture ID 200
+            Name:    "berries",
+        },
+        {
+            ItemId:  1,
+            Texture: 201,
+            Name:    "health_potion",
+        },
+        {
+            ItemId:  2,
+            Texture: 202,
+            Name:    "iron_sword",
+        },
+        {
+            ItemId:  3,
+            Texture: 203,
+            Name:    "wooden_shield",
+        },
+        {
+            ItemId:  4,
+            Texture: 204,
+            Name:    "gold_coin",
+        },
+    }
+
+    // Write to buffer
+    buf := gbuf.NewEmptyGBuf()
+    grpgitem.WriteHeader(buf)
+    grpgitem.WriteItems(buf, items)
+
+    // Save to file
+    os.WriteFile("items.grpgitem", buf.Bytes(), 0644)
+}
+```
+
+### Loading Item Definitions
+
+```go
+package main
+
+import (
+    "fmt"
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgitem"
+    "os"
+)
+
+func main() {
+    // Load file
+    data, err := os.ReadFile("items.grpgitem")
+    if err != nil {
+        panic(err)
+    }
+
+    buf := gbuf.NewGBuf(data)
+
+    // Read and validate header
+    header, err := grpgitem.ReadHeader(buf)
+    if err != nil {
+        panic("Invalid GRPGITEM file")
+    }
+
+    expectedMagic := [8]byte{'G', 'R', 'P', 'G', 'I', 'T', 'E', 'M'}
+    if header.Magic != expectedMagic {
+        panic("Invalid magic number")
+    }
+
+    // Read items
+    items, err := grpgitem.ReadItems(buf)
+    if err != nil {
+        panic("Failed to read items")
+    }
+
+    // Build lookup maps
+    itemsByID := make(map[uint16]grpgitem.Item)
+    itemsByName := make(map[string]grpgitem.Item)
+
+    for _, item := range items {
+        itemsByID[item.ItemId] = item
+        itemsByName[item.Name] = item
+        fmt.Printf("Loaded item: %s (ID: %d, Texture: %d)\n",
+            item.Name, item.ItemId, item.Texture)
+    }
+
+    // Look up item by name
+    if item, exists := itemsByName["berries"]; exists {
+        fmt.Printf("Berries use texture %d\n", item.Texture)
+    }
+}
+```
+
+## Binary Format Details
+
+### File Extension
+
+`.grpgitem`
+
+### Magic Number
+
+`GRPGITEM` (ASCII: `0x47 0x52 0x50 0x47 0x49 0x54 0x45 0x4D`)
+
+### Field Order
+
+Item fields are serialized in this order:
+1. **Item ID** (2 bytes) - Stored first for efficient lookup
+2. **Texture ID** (2 bytes) - Icon for inventory display
+3. **Name** (length-prefixed string) - Human-readable identifier
+
+### String Encoding
+
+Item names use the GBuf length-prefixed string format:
+- 4-byte uint32 length
+- N bytes of UTF-8 encoded string data
+
+This allows for international characters in item names.
+
+### Texture References
+
+The `Texture` field references icon textures from the GRPGTEX format:
+- Must match a texture's `InternalIdInt` value
+- Used for inventory display, tooltips, and UI
+- Invalid references will cause rendering errors
+
+### Example Binary Layout
+
+```
+Offset | Bytes                           | Description
+-------|----------------------------------|---------------------------
+0x00   | 47 52 50 47 49 54 45 4D         | Magic "GRPGITEM"
+0x08   | 00 02                           | Count: 2 items
+0x0A   | 00 01                           | Item ID: 1
+0x0C   | 00 03                           | Texture ID: 3
+0x0E   | 00 00 00 07                     | Name length: 7
+0x12   | 62 65 72 72 69 65 73            | Name: "berries"
+0x19   | 00 02                           | Item ID: 2
+0x1B   | 00 03                           | Texture ID: 3
+0x1D   | 00 00 00 08                     | Name length: 8
+0x21   | 62 65 72 ... 73 73              | Name: "berriess"
+```
+
+## Size Limits
+
+- **Maximum Items:** 65,535 (uint16 count)
+- **Maximum Item ID:** 65,535 (uint16 range)
+- **Maximum Texture ID:** 65,535 (uint16 range)
+- **Maximum Name Length:** 4,294,967,295 bytes (uint32 length, impractical)
+
+## Item Properties
+
+The GRPGITEM format currently stores only basic identification data. Additional item properties are typically stored separately:
+
+### Future Extensions
+
+The source code comments mention potential future additions:
+- **Stackable flag:** Whether items can stack in inventory
+- **Stack size:** Maximum items per inventory slot
+- **Rarity:** Common, rare, epic, legendary
+- **Category:** Weapon, armor, consumable, quest item
+- **Value:** Base price for trading
+
+These would be added to the binary format while maintaining backward compatibility.
+
+### External Data
+
+Item behavior is typically defined in separate systems:
+- **Stats:** Damage, defense, healing amount
+- **Effects:** Buffs, debuffs, abilities granted
+- **Crafting recipes:** Required materials
+- **Loot tables:** Drop rates and locations
+
+## Inventory Systems
+
+Items are typically used in inventory systems that reference them by ID:
+
+```go
+type InventorySlot struct {
+    ItemId uint16  // References item definition
+    Count  uint16  // Number of items in this slot
+}
+
+type Inventory struct {
+    Slots [20]InventorySlot
+}
+
+// Add item to inventory
+func AddItem(inv *Inventory, itemId uint16, count uint16) {
+    for i := range inv.Slots {
+        if inv.Slots[i].ItemId == itemId {
+            inv.Slots[i].Count += count
+            return
+        }
+        if inv.Slots[i].ItemId == 0 { // Empty slot
+            inv.Slots[i] = InventorySlot{ItemId: itemId, Count: count}
+            return
+        }
+    }
+}
+```
+
+## Item Drops
+
+Items can be obtained from various sources:
+
+```go
+// Drop from objects (e.g., berry bush)
+type ObjectDrop struct {
+    ObjId  uint16   // Object that drops items
+    ItemId uint16   // Item that drops
+    Min    uint16   // Minimum drop count
+    Max    uint16   // Maximum drop count
+}
+
+// Drop from NPCs (loot)
+type NpcDrop struct {
+    NpcId     uint16
+    ItemId    uint16
+    DropRate  float32 // 0.0 to 1.0
+    MinCount  uint16
+    MaxCount  uint16
+}
+```
+
+## Error Handling
+
+Common errors when reading GRPGITEM files:
+
+- **Invalid magic number:** File is not a GRPGITEM file
+- **Insufficient data:** File is truncated
+- **Invalid item count:** Corrupted count field
+- **String length mismatch:** Name length exceeds remaining data
+- **Invalid texture reference:** Texture ID doesn't exist in atlas
+
+```go
+header, err := grpgitem.ReadHeader(buf)
+if err != nil {
+    // Handle: file too small, not enough bytes for header
+}
+
+items, err := grpgitem.ReadItems(buf)
+if err != nil {
+    // Handle: corrupted item data, invalid string lengths
+}
+```
+
+## Performance Considerations
+
+### Lookup Maps
+
+For efficient item lookups at runtime:
+
+```go
+// By ID for inventory operations
+itemsByID := make(map[uint16]grpgitem.Item, len(items))
+for _, item := range items {
+    itemsByID[item.ItemId] = item
+}
+
+// By name for console commands/debugging
+itemsByName := make(map[string]grpgitem.Item, len(items))
+for _, item := range items {
+    itemsByName[item.Name] = item
+}
+```
+
+### Memory Usage
+
+For games with thousands of items:
+- Pre-allocate lookup maps with known capacity
+- Use item ID references instead of full structs in inventories
+- Consider loading item definitions once at startup
+
+## Related Formats
+
+- [GRPGTEX](/api/grpgtex) - Texture atlas referenced by `Texture` field
+- [GRPGOBJ](/api/grpgobj) - Objects that may drop items when harvested
+- [GRPGNPC](/api/grpgnpc) - NPCs that may trade or drop items
+- [GBuf](/api/gbuf) - Binary buffer used for serialization

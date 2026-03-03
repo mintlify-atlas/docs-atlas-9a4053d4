@@ -1,0 +1,291 @@
+---
+title: 'Objects'
+description: 'Interactive world objects with state management'
+---
+
+Objects are static interactive entities in the game world that can have multiple visual states and respond to player interactions.
+
+## Object Structure
+
+### GameObj
+
+The server-side object representation:
+
+```go server-go/shared/obj.go
+type GameObj struct {
+	ObjData  grpgobj.Obj
+	ChunkPos util.Vector2I
+	State    byte
+}
+```
+
+<ParamField path="ObjData" type="grpgobj.Obj">
+  Reference to the object's static data (name, textures, flags)
+</ParamField>
+
+<ParamField path="ChunkPos" type="Vector2I">
+  The chunk coordinates containing this object (cached for efficient packet handling)
+</ParamField>
+
+<ParamField path="State" type="byte">
+  Current visual/functional state (0-255), determines which texture to display
+</ParamField>
+
+### Object Data Format
+
+Object definitions use the GRPGOBJ data format:
+
+```go data-go/grpgobj/grpgobj.go
+type Obj struct {
+	Name         string
+	ObjId        uint16
+	Flags        ObjFlags
+	Textures     []uint16
+	InteractText string
+}
+```
+
+<ParamField path="Name" type="string">
+  Internal name for the object
+</ParamField>
+
+<ParamField path="ObjId" type="uint16">
+  Unique identifier for the object type
+</ParamField>
+
+<ParamField path="Flags" type="ObjFlags">
+  Bitmask controlling object behavior (STATE, INTERACT)
+</ParamField>
+
+<ParamField path="Textures" type="[]uint16">
+  Array of texture IDs - index corresponds to state number
+</ParamField>
+
+<ParamField path="InteractText" type="string">
+  Text shown to player when hovering over the object (only if INTERACT flag set)
+</ParamField>
+
+## Object Flags
+
+Objects use a flag system to define their capabilities:
+
+```go data-go/grpgobj/grpgobj.go
+type ObjFlag byte
+type ObjFlags byte
+
+const (
+	STATE    ObjFlag = 1 << iota // bit 0
+	INTERACT                     // bit 1
+)
+
+func IsFlagSet(flags ObjFlags, flag ObjFlag) bool {
+	return flags&ObjFlags(flag) != 0
+}
+```
+
+### STATE Flag
+
+Indicates the object has multiple visual states:
+
+- **Not set:** Object has single texture (`Textures[0]`)
+- **Set:** Object has multiple textures indexed by state number
+- Example: A berry bush with states 0 (with berries) and 1 (picked)
+
+### INTERACT Flag
+
+Indicates the object can be interacted with:
+
+- **Not set:** Object is purely decorative
+- **Set:** Object has an interaction script and displays `InteractText`
+- Interaction triggers the registered `OnObjInteract` callback
+
+<Info>
+The `InteractText` field is only serialized when the INTERACT flag is set, saving bandwidth.
+</Info>
+
+## State Management
+
+Object states control which texture is displayed and can be changed through scripts:
+
+### Getting State
+
+```go server-go/scripts/context.go
+func (o *ObjInteractCtx) GetObjState() uint8 {
+	return o.game.TrackedObjs[o.objPos].State
+}
+```
+
+### Setting State
+
+```go server-go/scripts/context.go
+func (o *ObjInteractCtx) SetObjState(new uint8) {
+	trackedObj := o.game.TrackedObjs[o.objPos]
+	trackedObj.State = new
+
+	network.UpdatePlayersByChunk(trackedObj.ChunkPos, o.game, &s2c.ObjUpdate{
+		ChunkPos: trackedObj.ChunkPos,
+		Rebuild:  false,
+	})
+}
+```
+
+When state changes, an `ObjUpdate` packet is broadcast to all players in the chunk.
+
+### Example: Berry Bush
+
+```go server-go/content/berry_bush.go
+scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+	if ctx.GetObjState() == 0 {
+		// State 0: berries available
+		ctx.SetObjState(1) // Change to picked state
+		ctx.PlayerInvAdd(scripts.BERRIES)
+		ctx.PlayerAddXp(shared.Foraging, 100)
+
+		// Respawn after 100 ticks
+		ctx.AddTimer(100, func() {
+			ctx.SetObjState(0)
+		})
+	}
+})
+```
+
+This creates a resource gathering mechanic:
+1. Player interacts with berry bush (state 0)
+2. Object changes to picked state (state 1)
+3. Player receives berries and XP
+4. After 100 ticks, berries respawn (state 0)
+
+<Tip>
+Use state 0 for the default/ready state of interactive objects. This makes the logic more intuitive.
+</Tip>
+
+## Data Format
+
+Objects are loaded from the GRPGOBJ binary format:
+
+```
+[Header: "GRPGOBJ\x00" (8 bytes)]
+[Object Count: uint16]
+[For each Object:]
+  [Name: length-prefixed string]
+  [Object ID: uint16]
+  [Flags: byte]
+  [If STATE flag NOT set:]
+    [Texture ID: uint16]
+  [If STATE flag set:]
+    [Texture Count: uint16]
+    [For each texture:]
+      [Texture ID: uint16]
+  [If INTERACT flag set:]
+    [Interact Text: length-prefixed string]
+```
+
+### Reading Objects
+
+```go data-go/grpgobj/grpgobj.go
+func ReadObjs(buf *gbuf.GBuf) ([]Obj, error) {
+	len, err := buf.ReadUint16()
+	if err != nil {
+		return nil, err
+	}
+
+	objArr := make([]Obj, len)
+
+	for idx := range len {
+		name, err1 := buf.ReadString()
+		objId, err2 := buf.ReadUint16()
+		flagByte, err3 := buf.ReadByte()
+
+		if err := cmp.Or(err1, err2, err3); err != nil {
+			return nil, err
+		}
+
+		textures := make([]uint16, 0, 1)
+		flags := ObjFlags(flagByte)
+
+		if !IsFlagSet(flags, STATE) {
+			texId, err := buf.ReadUint16()
+			if err != nil {
+				return nil, err
+			}
+			textures = append(textures, texId)
+		} else {
+			texLen, err := buf.ReadUint16()
+			if err != nil {
+				return nil, err
+			}
+
+			for _ = range texLen {
+				texId, err := buf.ReadUint16()
+				if err != nil {
+					return nil, err
+				}
+				textures = append(textures, texId)
+			}
+		}
+
+		interactText := ""
+		if IsFlagSet(flags, INTERACT) {
+			interactText, err = buf.ReadString()
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		objArr[idx] = Obj{
+			Name:         name,
+			ObjId:        objId,
+			Flags:        flags,
+			Textures:     textures,
+			InteractText: interactText,
+		}
+	}
+
+	return objArr, nil
+}
+```
+
+## Interaction System
+
+Players can interact with objects that have the INTERACT flag set. See [Content Scripting](/systems/content-scripting) for details on implementing interactions.
+
+### Interaction Context
+
+The `ObjInteractCtx` provides methods for:
+
+- Reading/writing object state
+- Modifying player inventory
+- Granting skill XP
+- Scheduling timed callbacks
+
+<Warning>
+Object states are global and shared across all players. If you need per-player state, use player data structures instead.
+</Warning>
+
+## Chunk-based Optimization
+
+Objects cache their chunk position for efficient packet handling:
+
+```go
+ChunkPos util.Vector2I
+```
+
+This avoids recomputing chunk coordinates when:
+- Broadcasting state updates to nearby players
+- Sending initial object data to newly connected clients
+- Processing spatial queries
+
+<Note>
+Chunk position is calculated as `{X: pos.X / 16, Y: pos.Y / 16}` using 16x16 chunks.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Content Scripting" icon="code" href="/systems/content-scripting">
+    Learn how to create interactive object behaviors
+  </Card>
+  <Card title="Inventories" icon="boxes-stacked" href="/systems/inventories">
+    Understand the inventory system for storing collected items
+  </Card>
+</CardGroup>

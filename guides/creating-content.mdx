@@ -1,0 +1,254 @@
+---
+title: Creating Game Content
+description: Learn how to create interactive game content using GRPG's scripting system
+---
+
+GRPG's content scripting system allows you to create interactive objects and NPCs with custom behavior. This guide walks you through creating game content from scratch.
+
+## Overview
+
+Game content in GRPG is created through Go code that registers event handlers for objects and NPCs. The scripting system provides contexts with helper methods for common operations like managing object states, player inventory, XP, and dialogue.
+
+## Content Types
+
+GRPG supports two main types of interactive content:
+
+- **Interactive Objects** - Stateful objects that players can interact with
+- **NPCs** - Non-player characters that can talk to players and wander within an area
+
+## Creating Interactive Objects
+
+<Steps>
+  <Step title="Define Object Constants">
+    First, define constants for your objects in `server-go/scripts/constants.go`:
+
+    ```go server-go/scripts/constants.go
+    type ObjConstant uint16
+    type ItemConstant uint16
+
+    const (
+        _ ObjConstant = iota
+        BERRY_BUSH
+    )
+
+    const (
+        _ ItemConstant = iota
+        BERRIES
+    )
+    ```
+
+    <Note>
+      Object IDs start from 1 (using iota with blank identifier). ID 0 is reserved.
+    </Note>
+  </Step>
+
+  <Step title="Create Content File">
+    Create a new file in `server-go/content/` for your object behavior:
+
+    ```go server-go/content/berry_bush.go
+    package content
+
+    import (
+        "server/scripts"
+        "server/shared"
+    )
+
+    func init() {
+        scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+            if ctx.GetObjState() == 0 {
+                ctx.SetObjState(1)
+                ctx.PlayerInvAdd(scripts.BERRIES)
+                ctx.PlayerAddXp(shared.Foraging, 100)
+
+                ctx.AddTimer(100, func() {
+                    ctx.SetObjState(0)
+                })
+            }
+        })
+    }
+    ```
+
+    This creates a berry bush that:
+    - Checks if it's in the "full" state (state 0)
+    - When harvested, switches to "empty" state (state 1)
+    - Gives the player berries and foraging XP
+    - Resets to full state after 100 game ticks
+  </Step>
+
+  <Step title="Available Context Methods">
+    The `ObjInteractCtx` provides these methods:
+
+    | Method | Description |
+    |--------|-------------|
+    | `GetObjState()` | Returns the current state of the object (uint8) |
+    | `SetObjState(new uint8)` | Updates object state and notifies all players in the chunk |
+    | `PlayerInvAdd(itemId ItemConstant)` | Adds an item to the player's inventory |
+    | `PlayerAddXp(skill Skill, amount uint32)` | Gives the player XP in a specific skill |
+    | `AddTimer(ticks uint32, fn TimerFunc)` | Schedules a function to run after N game ticks |
+  </Step>
+</Steps>
+
+## Creating NPCs
+
+<Steps>
+  <Step title="Define NPC Constants">
+    Add your NPC to the constants file:
+
+    ```go server-go/scripts/constants.go
+    type NpcConstant uint16
+
+    const (
+        _ NpcConstant = iota
+        TEST
+        MERCHANT
+        QUEST_GIVER
+    )
+    ```
+  </Step>
+
+  <Step title="Spawn and Register NPC">
+    Create a content file that spawns the NPC and registers its dialogue:
+
+    ```go server-go/content/test_npc.go
+    package content
+
+    import "server/scripts"
+
+    func init() {
+        // Spawn NPC at position (3, 3) with wander range of 2 tiles
+        scripts.SpawnNpc(scripts.TEST, 3, 3, 2)
+
+        scripts.OnTalkNpc(scripts.TEST, func(ctx *scripts.NpcTalkCtx) {
+            ctx.ClearDialogueQueue()
+
+            ctx.TalkPlayer("hello, test")
+            ctx.TalkNpc("...")
+            ctx.TalkPlayer("C U")
+
+            ctx.StartDialogue()
+        })
+    }
+    ```
+  </Step>
+
+  <Step title="NPC Context Methods">
+    The `NpcTalkCtx` provides these methods:
+
+    | Method | Description |
+    |--------|-------------|
+    | `TalkPlayer(msg string)` | Adds a player dialogue line to the queue |
+    | `TalkNpc(msg string)` | Adds an NPC dialogue line to the queue |
+    | `ClearDialogueQueue()` | Clears all pending dialogue |
+    | `StartDialogue()` | Sends the dialogue to the player's client |
+
+    <Note>
+      Always call `ClearDialogueQueue()` at the start to ensure clean state, then add dialogue lines, and finish with `StartDialogue()`.
+    </Note>
+  </Step>
+</Steps>
+
+## Advanced Examples
+
+### Stateful Object with Multiple States
+
+```go
+scripts.OnObjInteract(scripts.CROP, func(ctx *scripts.ObjInteractCtx) {
+    currentState := ctx.GetObjState()
+    
+    switch currentState {
+    case 0: // Unplanted
+        ctx.SetObjState(1) // Planted
+        ctx.AddTimer(200, func() {
+            ctx.SetObjState(2) // Growing
+        })
+    case 2: // Growing
+        ctx.AddTimer(200, func() {
+            ctx.SetObjState(3) // Harvestable
+        })
+    case 3: // Harvestable
+        ctx.PlayerInvAdd(scripts.WHEAT)
+        ctx.PlayerAddXp(shared.Farming, 150)
+        ctx.SetObjState(0) // Reset to unplanted
+    }
+})
+```
+
+### Complex NPC Dialogue
+
+```go
+scripts.OnTalkNpc(scripts.QUEST_GIVER, func(ctx *scripts.NpcTalkCtx) {
+    ctx.ClearDialogueQueue()
+    
+    ctx.TalkNpc("Greetings, adventurer!")
+    ctx.TalkNpc("I have a task that needs doing.")
+    ctx.TalkPlayer("What do you need?")
+    ctx.TalkNpc("Collect 10 berries from the forest.")
+    ctx.TalkPlayer("I'll see what I can do.")
+    
+    ctx.StartDialogue()
+})
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Clear Constant Names">
+    Name your constants descriptively to make your content code self-documenting:
+    
+    ```go
+    // Good
+    BERRY_BUSH
+    OAK_TREE
+    FISHING_SPOT
+    
+    // Avoid
+    OBJ_1
+    THING_A
+    ```
+  </Accordion>
+
+  <Accordion title="Handle All States">
+    For stateful objects, always check the current state before performing actions:
+    
+    ```go
+    if ctx.GetObjState() == 0 {
+        // Only interact when in correct state
+        ctx.SetObjState(1)
+        // ...
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use Timers for Respawns">
+    Use `AddTimer` to create respawning resources:
+    
+    ```go
+    ctx.AddTimer(100, func() {
+        ctx.SetObjState(0) // Reset to full
+    })
+    ```
+    
+    Timer duration is in game ticks (server update cycles).
+  </Accordion>
+
+  <Accordion title="Clear Dialogue Before Building">
+    Always clear the dialogue queue before building new conversations:
+    
+    ```go
+    ctx.ClearDialogueQueue() // Prevents duplicate/stale dialogue
+    // Build dialogue...
+    ctx.StartDialogue()
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Custom Objects" icon="cube" href="/guides/custom-objects">
+    Learn how to create custom object types with the data packer
+  </Card>
+  <Card title="Map Creation" icon="map" href="/guides/map-creation">
+    Place your content on the map using the map editor
+  </Card>
+</CardGroup>

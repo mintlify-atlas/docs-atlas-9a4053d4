@@ -1,0 +1,213 @@
+---
+title: 'Content Scripting'
+description: 'Create interactive content with event-driven scripting'
+---
+
+GRPG uses an event-driven scripting system for creating interactive game content. Scripts are written in Go and registered during server initialization.
+
+## Script Types
+
+There are three main types of content scripts:
+
+1. **Object Interaction Scripts** - Handle player interactions with objects
+2. **NPC Talk Scripts** - Handle dialogue with NPCs
+3. **NPC Spawning** - Place NPCs in the world
+
+## Object Interaction Scripts
+
+### OnObjInteract
+
+Register an interaction handler for an object using `OnObjInteract`:
+
+```go server-go/content/berry_bush.go
+package content
+
+import (
+	"server/scripts"
+	"server/shared"
+)
+
+func init() {
+	scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+		if ctx.GetObjState() == 0 {
+			ctx.SetObjState(1)
+			ctx.PlayerInvAdd(scripts.BERRIES)
+			ctx.PlayerAddXp(shared.Foraging, 100)
+
+			ctx.AddTimer(100, func() {
+				ctx.SetObjState(0)
+			})
+		}
+	})
+}
+```
+
+### ObjInteractCtx API
+
+The interaction context provides methods for manipulating object state and player data:
+
+<ParamField path="GetObjState()" type="uint8">
+  Returns the current state of the object (0-255)
+</ParamField>
+
+<ParamField path="SetObjState(new uint8)" type="void">
+  Updates the object state and broadcasts the change to nearby players
+</ParamField>
+
+<ParamField path="PlayerInvAdd(itemId ItemConstant)" type="void">
+  Adds an item to the player's inventory and sends an update packet
+</ParamField>
+
+<ParamField path="PlayerAddXp(skill Skill, xpAmount uint32)" type="void">
+  Grants XP to the player for the specified skill and sends an update packet
+</ParamField>
+
+<ParamField path="AddTimer(ticks uint32, fn func())" type="void">
+  Schedules a callback to execute after the specified number of game ticks
+</ParamField>
+
+<Tip>
+Object states are synchronized automatically. When you call `SetObjState()`, all players in the chunk receive an `ObjUpdate` packet.
+</Tip>
+
+## NPC Talk Scripts
+
+### OnTalkNpc
+
+Register a dialogue handler for an NPC:
+
+```go server-go/content/test_npc.go
+package content
+
+import "server/scripts"
+
+func init() {
+	scripts.OnTalkNpc(scripts.TEST, func(ctx *scripts.NpcTalkCtx) {
+		ctx.ClearDialogueQueue()
+
+		ctx.TalkPlayer("hello, test")
+		ctx.TalkNpc("...")
+		ctx.TalkPlayer("C U")
+
+		ctx.StartDialogue()
+	})
+}
+```
+
+### NpcTalkCtx API
+
+<ParamField path="ClearDialogueQueue()" type="void">
+  Clears the player's dialogue queue and sends a clear talkbox packet
+</ParamField>
+
+<ParamField path="TalkPlayer(msg string)" type="void">
+  Adds a player dialogue line to the queue
+</ParamField>
+
+<ParamField path="TalkNpc(msg string)" type="void">
+  Adds an NPC dialogue line to the queue
+</ParamField>
+
+<ParamField path="StartDialogue()" type="void">
+  Begins playing the dialogue sequence to the player
+</ParamField>
+
+<Info>
+Dialogue is displayed sequentially. The client advances through the queue as the player presses the interact key.
+</Info>
+
+## NPC Spawning
+
+### SpawnNpc
+
+Place NPCs in the world during initialization:
+
+```go server-go/content/test_npc.go
+scripts.SpawnNpc(scripts.TEST, 3, 3, 2)
+// Spawns TEST NPC at position (3,3) with a wander range of 2 tiles
+```
+
+**Parameters:**
+- `npcId` - The NPC type constant
+- `x` - X coordinate in the world
+- `y` - Y coordinate in the world  
+- `wanderRange` - Number of tiles the NPC can wander from spawn point
+
+<Warning>
+NPCs are spawned during server initialization. The spawn positions are static and cannot be changed at runtime without server restart.
+</Warning>
+
+## Registration System
+
+All content scripts use the `init()` function to register handlers:
+
+```go server-go/scripts/listeners.go
+func OnObjInteract(objId ObjConstant, fnc ObjInteractFunc) {
+	pendingObjInteracts = append(pendingObjInteracts, PendingObjInteract{
+		id: objId,
+		fn: fnc,
+	})
+}
+
+func OnTalkNpc(npcId NpcConstant, fnc NpcTalkFunc) {
+	pendingNpcTalks = append(pendingNpcTalks, pendingNpcTalk{
+		id: npcId,
+		fn: fnc,
+	})
+}
+
+func SpawnNpc(npcId NpcConstant, x uint32, y uint32, wanderRange uint8) {
+	pendingNpcSpawns = append(pendingNpcSpawns, pendingNpcSpawn{
+		npcId:       npcId,
+		x:           x,
+		y:           y,
+		wanderRange: wanderRange,
+	})
+}
+```
+
+The ScriptManager processes these pending registrations during server startup:
+
+- Object interaction scripts are stored in `InteractScripts` map
+- NPC talk scripts are stored in `NpcTalkScripts` map  
+- NPC spawns create entries in `game.TrackedNpcs`
+
+## Constants
+
+Content uses type-safe constants for referencing game entities:
+
+```go server-go/scripts/constants.go
+type ObjConstant uint16
+type NpcConstant uint16
+type ItemConstant uint16
+
+const (
+	_ ObjConstant = iota
+	BERRY_BUSH
+)
+
+const (
+	_ NpcConstant = iota
+	TEST
+)
+
+const (
+	_ ItemConstant = iota
+	BERRIES
+)
+```
+
+<Note>
+These constants should eventually be auto-generated from `.gcfg` files as part of the data-packer tool.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Objects" icon="cube" href="/systems/objects">
+    Learn about the object system and state management
+  </Card>
+  <Card title="NPCs" icon="users" href="/systems/npcs">
+    Understand NPC behavior and movement
+  </Card>
+</CardGroup>

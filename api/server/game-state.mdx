@@ -1,0 +1,359 @@
+---
+title: Game State API
+description: Core game state management structures and player operations
+---
+
+## Overview
+
+The Game State API provides the core data structures for managing the GRPG server state, including players, NPCs, objects, and world data.
+
+## Game Struct
+
+The `Game` struct is the central state container for the server.
+
+```go
+type Game struct {
+    Players      map[*Player]struct{}
+    Connections  map[net.Conn]*Player
+    MaxX         uint32
+    MaxY         uint32
+    Database     *sql.DB
+    TrackedObjs  map[util.Vector2I]*GameObj
+    TrackedNpcs  map[util.Vector2I]*GameNpc
+    Mu           sync.RWMutex
+    CollisionMap map[util.Vector2I]struct{}
+    Objs         map[util.Vector2I]struct{}
+    TimedScripts map[uint32][]func()
+    NpcMoves     map[util.Vector2I][][]NpcMove
+    CurrentTick  uint32
+}
+```
+
+### Fields
+
+<ParamField path="Players" type="map[*Player]struct{}">
+  Set of all currently connected players
+</ParamField>
+
+<ParamField path="Connections" type="map[net.Conn]*Player">
+  Maps network connections to player instances
+</ParamField>
+
+<ParamField path="MaxX" type="uint32">
+  Maximum X coordinate of the game world
+</ParamField>
+
+<ParamField path="MaxY" type="uint32">
+  Maximum Y coordinate of the game world
+</ParamField>
+
+<ParamField path="Database" type="*sql.DB">
+  Database connection for persistent storage
+</ParamField>
+
+<ParamField path="TrackedObjs" type="map[util.Vector2I]*GameObj">
+  Map of position to game objects (trees, rocks, bushes, etc.)
+</ParamField>
+
+<ParamField path="TrackedNpcs" type="map[util.Vector2I]*GameNpc">
+  Map of position to NPCs in the world
+</ParamField>
+
+<ParamField path="Mu" type="sync.RWMutex">
+  Read-write mutex for thread-safe game state access
+</ParamField>
+
+<ParamField path="CollisionMap" type="map[util.Vector2I]struct{}">
+  Positions that block player movement
+</ParamField>
+
+<ParamField path="Objs" type="map[util.Vector2I]struct{}">
+  Set of all object positions (currently overlaps with CollisionMap)
+</ParamField>
+
+<ParamField path="TimedScripts" type="map[uint32][]func()">
+  Scripts scheduled to run at specific game ticks
+</ParamField>
+
+<ParamField path="NpcMoves" type="map[util.Vector2I][][]NpcMove">
+  Queued NPC movement paths organized by chunk
+</ParamField>
+
+<ParamField path="CurrentTick" type="uint32">
+  Current game tick counter
+</ParamField>
+
+---
+
+## Player Struct
+
+Represents a player character in the game world.
+
+```go
+type Player struct {
+    Pos           util.Vector2I
+    ChunkPos      util.Vector2I
+    Facing        Direction
+    Inventory     Inventory
+    Name          string
+    DialogueQueue DialogueQueue
+    Skills        map[Skill]*SkillInfo
+    Conn          net.Conn
+}
+```
+
+### Fields
+
+<ParamField path="Pos" type="util.Vector2I">
+  Player's current world position (tile coordinates)
+</ParamField>
+
+<ParamField path="ChunkPos" type="util.Vector2I">
+  Current chunk the player is in (Pos / 16)
+</ParamField>
+
+<ParamField path="Facing" type="Direction">
+  Direction the player is facing (UP, RIGHT, DOWN, LEFT)
+</ParamField>
+
+<ParamField path="Inventory" type="Inventory">
+  Player's inventory (24 slots)
+</ParamField>
+
+<ParamField path="Name" type="string">
+  Player's username
+</ParamField>
+
+<ParamField path="DialogueQueue" type="DialogueQueue">
+  Queue of dialogue messages for NPC conversations
+</ParamField>
+
+<ParamField path="Skills" type="map[Skill]*SkillInfo">
+  Player's skill levels and experience points
+</ParamField>
+
+<ParamField path="Conn" type="net.Conn">
+  Network connection to the player's client
+</ParamField>
+
+### Methods
+
+#### LoadFromDB
+
+```go
+func (p *Player) LoadFromDB(db *sql.DB) error
+```
+
+Loads player data from the database. If the player doesn't exist, returns nil without error.
+
+**Returns:** Error if database operation fails
+
+---
+
+#### SaveToDB
+
+```go
+func (p *Player) SaveToDB(db *sql.DB) error
+```
+
+Saves player data to the database. Creates a new record if the player doesn't exist, otherwise updates the existing record.
+
+**Returns:** Error if database operation fails
+
+---
+
+#### GetFacingCoord
+
+```go
+func (p *Player) GetFacingCoord() util.Vector2I
+```
+
+Returns the coordinate of the tile the player is currently facing.
+
+**Returns:** Vector2I position of the faced tile
+
+---
+
+#### AddXp
+
+```go
+func (p *Player) AddXp(skill Skill, xpAmount uint32)
+```
+
+Adds experience points to a skill and automatically levels up if thresholds are reached.
+
+<ParamField path="skill" type="Skill">
+  The skill to add XP to (e.g., Foraging)
+</ParamField>
+
+<ParamField path="xpAmount" type="uint32">
+  Amount of XP to add (capped at MAX_XP)
+</ParamField>
+
+---
+
+## Supporting Types
+
+### GameObj
+
+Represents an interactive object in the world.
+
+```go
+type GameObj struct {
+    ObjData  grpgobj.Obj
+    ChunkPos util.Vector2I
+    State    byte
+}
+```
+
+<ParamField path="ObjData" type="grpgobj.Obj">
+  Static object data (ID, sprite, etc.)
+</ParamField>
+
+<ParamField path="ChunkPos" type="util.Vector2I">
+  Chunk containing this object
+</ParamField>
+
+<ParamField path="State" type="byte">
+  Dynamic state value (e.g., 0 = berry bush empty, 1 = has berries)
+</ParamField>
+
+---
+
+### GameNpc
+
+Represents an NPC in the world.
+
+```go
+type GameNpc struct {
+    Pos         util.Vector2I
+    NpcData     *grpgnpc.Npc
+    ChunkPos    util.Vector2I
+    WanderRange uint8
+}
+```
+
+<ParamField path="Pos" type="util.Vector2I">
+  Current NPC position
+</ParamField>
+
+<ParamField path="NpcData" type="*grpgnpc.Npc">
+  Static NPC data (ID, sprite, name, etc.)
+</ParamField>
+
+<ParamField path="ChunkPos" type="util.Vector2I">
+  Current chunk position
+</ParamField>
+
+<ParamField path="WanderRange" type="uint8">
+  How many tiles the NPC can wander from spawn point
+</ParamField>
+
+---
+
+### Inventory
+
+Player inventory with 24 slots.
+
+```go
+type Inventory struct {
+    Items [24]InventoryItem
+}
+
+type InventoryItem struct {
+    ItemId uint16
+    Count  uint16
+    Dirty  bool
+}
+```
+
+#### AddItem
+
+```go
+func (i *Inventory) AddItem(itemId uint16)
+```
+
+Adds an item to the inventory. Stacks with existing items or finds the first empty slot.
+
+---
+
+### SkillInfo
+
+Tracks a player's level and XP for a specific skill.
+
+```go
+type SkillInfo struct {
+    Level uint8
+    XP    uint32
+}
+```
+
+**Available Skills:**
+- `Foraging` - Gathering berries and other resources
+
+---
+
+### DialogueQueue
+
+Manages NPC conversation state.
+
+```go
+type DialogueQueue struct {
+    Index       uint16
+    MaxIndex    uint16
+    ActiveNpcId uint16
+    Dialogues   []Dialogue
+}
+
+type Dialogue struct {
+    Type    DialogueType  // PLAYER or NPC
+    Content string
+}
+```
+
+#### Clear
+
+```go
+func (dq *DialogueQueue) Clear()
+```
+
+Resets the dialogue queue, clearing all messages and state.
+
+---
+
+## Direction Enum
+
+```go
+type Direction byte
+
+const (
+    UP    Direction = 0
+    RIGHT Direction = 1
+    DOWN  Direction = 2
+    LEFT  Direction = 3
+)
+```
+
+---
+
+## Usage Example
+
+```go
+// Access player in packet handler
+func handleSomething(game *shared.Game, player *shared.Player) {
+    // Get the tile the player is facing
+    facingPos := player.GetFacingCoord()
+    
+    // Check if there's an object there
+    if obj, exists := game.TrackedObjs[facingPos]; exists {
+        // Interact with the object
+        obj.State = 1
+    }
+    
+    // Add XP to player
+    player.AddXp(shared.Foraging, 10)
+    
+    // Save player data
+    player.SaveToDB(game.Database)
+}
+```

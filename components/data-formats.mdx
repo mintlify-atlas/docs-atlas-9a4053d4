@@ -1,0 +1,572 @@
+---
+title: Data Formats
+description: Understanding GRPG's custom binary data formats for game assets
+---
+
+## Overview
+
+GRPG uses custom binary formats for efficient storage and loading of game assets. All formats are built on top of **GBuf**, a custom binary buffer system, and use Big Endian byte ordering.
+
+## GBuf - Binary Buffer System
+
+GBuf is the foundation for all binary I/O in GRPG. It provides efficient reading and writing of binary data.
+
+### Structure
+
+```go data-go/gbuf/gbuf.go
+type GBuf struct {
+    slice []byte  // Underlying byte array
+    pos   int     // Current read/write position
+}
+
+func NewGBuf(data []byte) *GBuf {
+    return &GBuf{
+        slice: data,
+        pos:   0,
+    }
+}
+
+func NewEmptyGBuf() *GBuf {
+    return &GBuf{
+        slice: make([]byte, 0, 128),
+        pos:   0,
+    }
+}
+```
+
+### Read Operations
+
+GBuf provides methods for reading various data types:
+
+```go data-go/gbuf/gbuf.go
+// Read unsigned 16-bit integer (Big Endian)
+func (buf *GBuf) ReadUint16() (uint16, error) {
+    if buf.pos+2 > len(buf.slice) {
+        return 0, errors.New("not enough bytes to read uint16")
+    }
+    val := binary.BigEndian.Uint16(buf.slice[buf.pos : buf.pos+2])
+    buf.pos += 2
+    return val, nil
+}
+
+// Read unsigned 32-bit integer (Big Endian)
+func (buf *GBuf) ReadUint32() (uint32, error) {
+    if buf.pos+4 > len(buf.slice) {
+        return 0, errors.New("not enough bytes to read uint32")
+    }
+    val := binary.BigEndian.Uint32(buf.slice[buf.pos : buf.pos+4])
+    buf.pos += 4
+    return val, nil
+}
+
+// Read length-prefixed string (uint32 length + bytes)
+func (buf *GBuf) ReadString() (string, error) {
+    length, err := buf.ReadUint32()
+    if err != nil {
+        return "", errors.New("failed to read uint32 length of string")
+    }
+    bytes, err := buf.ReadBytes(int(length))
+    if err != nil {
+        return "", errors.New("failed to read bytes of a string")
+    }
+    return string(bytes[:]), nil
+}
+
+// Read boolean (encoded as byte: 1 = true, 0 = false)
+func (buf *GBuf) ReadBool() (bool, error) {
+    b, err := buf.ReadByte()
+    if err != nil {
+        return false, err
+    }
+    return b == 1, nil
+}
+```
+
+### Write Operations
+
+```go data-go/gbuf/gbuf.go
+func (buf *GBuf) WriteUint16(val uint16) {
+    temp := make([]byte, 2)
+    binary.BigEndian.PutUint16(temp, val)
+    buf.slice = append(buf.slice, temp...)
+}
+
+func (buf *GBuf) WriteUint32(val uint32) {
+    temp := make([]byte, 4)
+    binary.BigEndian.PutUint32(temp, val)
+    buf.slice = append(buf.slice, temp...)
+}
+
+// Write length-prefixed string
+func (buf *GBuf) WriteString(val string) {
+    buf.WriteUint32(uint32(len(val)))
+    buf.WriteBytes([]byte(val))
+}
+
+func (buf *GBuf) WriteBool(val bool) {
+    if val {
+        buf.WriteByte(1)
+    } else {
+        buf.WriteByte(0)
+    }
+}
+```
+
+<Note>
+  All multi-byte integers use Big Endian byte ordering for consistency across platforms.
+</Note>
+
+## GRPGTEX - Texture Format
+
+Stores texture images with unique identifiers.
+
+### File Structure
+
+```
+[Header: 8 bytes]     Magic number "GRPGTEX\x00"
+[uint32]              Number of textures
+For each texture:
+  [uint32]            Length of internal ID string
+  [bytes]             Internal ID string
+  [uint16]            Internal ID integer
+  [uint32]            Image data length
+  [bytes]             PNG/image data
+```
+
+### Implementation
+
+```go data-go/grpgtex/grpgtex.go
+type Header struct {
+    Magic [8]byte
+}
+
+type Texture struct {
+    InternalIdString []byte
+    InternalIdInt    uint16
+    ImageBytes       []byte
+}
+
+func WriteHeader(buf *gbuf.GBuf) {
+    header := Header{
+        Magic: [8]byte{'G', 'R', 'P', 'G', 'T', 'E', 'X', 0},
+    }
+    buf.WriteBytes(header.Magic[:])
+}
+
+func WriteTextures(buf *gbuf.GBuf, textures []Texture) {
+    buf.WriteUint32(uint32(len(textures)))
+    
+    for _, tex := range textures {
+        buf.WriteUint32(uint32(len(tex.InternalIdString)))
+        buf.WriteBytes(tex.InternalIdString)
+        buf.WriteUint16(tex.InternalIdInt)
+        buf.WriteUint32(uint32(len(tex.ImageBytes)))
+        buf.WriteBytes(tex.ImageBytes)
+    }
+}
+
+func ReadTextures(buf *gbuf.GBuf) ([]Texture, error) {
+    var textures []Texture
+    textureLen, err := buf.ReadUint32()
+    if err != nil {
+        return nil, err
+    }
+    
+    for range textureLen {
+        internalIdLen, _ := buf.ReadUint32()
+        internalIdString, _ := buf.ReadBytes(int(internalIdLen))
+        internalIdInt, _ := buf.ReadUint16()
+        imageBytesLen, _ := buf.ReadUint32()
+        imageBytes, _ := buf.ReadBytes(int(imageBytesLen))
+        
+        textures = append(textures, Texture{
+            InternalIdString: internalIdString,
+            InternalIdInt:    internalIdInt,
+            ImageBytes:       imageBytes,
+        })
+    }
+    
+    return textures, nil
+}
+```
+
+<Info>
+  Textures can be referenced by either string ID or integer ID for flexibility.
+</Info>
+
+## GRPGOBJ - Object Format
+
+Defines game objects with states, interactions, and textures.
+
+### File Structure
+
+```
+[Header: 8 bytes]     Magic number "GRPGOBJ\x00"
+[uint16]              Number of objects
+For each object:
+  [string]            Object name
+  [uint16]            Object ID
+  [byte]              Flags (STATE | INTERACT)
+  If stateful:
+    [uint16]          Number of textures
+    [uint16...]       Texture IDs for each state
+  Else:
+    [uint16]          Single texture ID
+  If interact flag set:
+    [string]          Interaction text
+```
+
+### Object Flags
+
+```go data-go/grpgobj/grpgobj.go
+type ObjFlag byte
+type ObjFlags byte
+
+const (
+    STATE    ObjFlag = 1 << iota // bit 0: Has multiple states
+    INTERACT                      // bit 1: Can be interacted with
+)
+
+func IsFlagSet(flags ObjFlags, flag ObjFlag) bool {
+    return flags&ObjFlags(flag) != 0
+}
+```
+
+### Implementation
+
+```go data-go/grpgobj/grpgobj.go
+type Obj struct {
+    Name         string
+    ObjId        uint16
+    Flags        ObjFlags
+    Textures     []uint16 // Size 1 if non-stateful, or one per state
+    InteractText string   // Only if INTERACT flag is set
+}
+
+func WriteObjs(buf *gbuf.GBuf, objs []Obj) {
+    buf.WriteUint16(uint16(len(objs)))
+    
+    for _, obj := range objs {
+        buf.WriteString(obj.Name)
+        buf.WriteUint16(obj.ObjId)
+        buf.WriteByte(byte(obj.Flags))
+        
+        if !IsFlagSet(obj.Flags, STATE) {
+            buf.WriteUint16(obj.Textures[0])
+        } else {
+            buf.WriteUint16(uint16(len(obj.Textures)))
+            for _, tex := range obj.Textures {
+                buf.WriteUint16(tex)
+            }
+        }
+        
+        if IsFlagSet(obj.Flags, INTERACT) {
+            buf.WriteString(obj.InteractText)
+        }
+    }
+}
+```
+
+<Tip>
+  Stateful objects use an array index as the state number. For example, `Textures[0]` is state 0, `Textures[1]` is state 1.
+</Tip>
+
+## GRPGNPC - NPC Format
+
+Defines non-player characters.
+
+### File Structure
+
+```
+[Header: 8 bytes]     Magic number "GRPGNPC\x00"
+[uint16]              Number of NPCs
+For each NPC:
+  [uint16]            NPC ID
+  [string]            NPC name
+  [uint16]            Texture ID
+```
+
+### Implementation
+
+```go data-go/grpgnpc/grpgnpc.go
+type Npc struct {
+    NpcId     uint16
+    Name      string
+    TextureId uint16
+}
+
+func WriteNpcs(buf *gbuf.GBuf, npcs []Npc) {
+    buf.WriteUint16(uint16(len(npcs)))
+    
+    for _, npc := range npcs {
+        buf.WriteUint16(npc.NpcId)
+        buf.WriteString(npc.Name)
+        buf.WriteUint16(npc.TextureId)
+    }
+}
+
+func ReadNpcs(buf *gbuf.GBuf) ([]Npc, error) {
+    npcLen, err := buf.ReadUint16()
+    if err != nil {
+        return nil, err
+    }
+    
+    npcs := make([]Npc, npcLen)
+    for idx := range npcLen {
+        id, _ := buf.ReadUint16()
+        name, _ := buf.ReadString()
+        textureId, _ := buf.ReadUint16()
+        
+        npcs[idx] = Npc{
+            NpcId:     id,
+            Name:      name,
+            TextureId: textureId,
+        }
+    }
+    
+    return npcs, nil
+}
+```
+
+## GRPGITEM - Item Format
+
+Defines inventory items.
+
+### File Structure
+
+```
+[Header: 8 bytes]     Magic number "GRPGITEM"
+[uint16]              Number of items
+For each item:
+  [uint16]            Item ID
+  [uint16]            Texture ID
+  [string]            Item name
+```
+
+### Implementation
+
+```go data-go/grpgitem/grpgitem.go
+type Item struct {
+    ItemId  uint16
+    Texture uint16
+    Name    string
+}
+
+func WriteItems(buf *gbuf.GBuf, items []Item) {
+    buf.WriteUint16(uint16(len(items)))
+    
+    for _, item := range items {
+        buf.WriteUint16(item.ItemId)
+        buf.WriteUint16(item.Texture)
+        buf.WriteString(item.Name)
+    }
+}
+
+func ReadItems(buf *gbuf.GBuf) ([]Item, error) {
+    itemLen, err := buf.ReadUint16()
+    if err != nil {
+        return nil, err
+    }
+    
+    itemArr := make([]Item, itemLen)
+    for idx := range itemLen {
+        itemId, _ := buf.ReadUint16()
+        textureId, _ := buf.ReadUint16()
+        itemName, _ := buf.ReadString()
+        
+        itemArr[idx] = Item{
+            ItemId:  itemId,
+            Texture: textureId,
+            Name:    itemName,
+        }
+    }
+    
+    return itemArr, nil
+}
+```
+
+## GRPGMAP - Map Format
+
+Stores map chunks with tiles and objects.
+
+### File Structure
+
+```
+[Header: 12 bytes]
+  [8 bytes]           Magic number "GRPGMAP\x00\x00"
+  [uint16]            Chunk X coordinate
+  [uint16]            Chunk Y coordinate
+[Zone: 1024 bytes]
+  [256 x uint16]      Tile IDs (16x16 grid)
+  [256 x uint16]      Object IDs (16x16 grid)
+```
+
+### Implementation
+
+```go data-go/grpgmap/grpgmap.go
+type Header struct {
+    Magic  [8]byte
+    ChunkX uint16
+    ChunkY uint16
+}
+
+type Tile uint16
+type Obj uint16
+
+type Zone struct {
+    Tiles [256]Tile  // 16x16 grid
+    Objs  [256]Obj   // 16x16 grid
+}
+
+func WriteHeader(buf *gbuf.GBuf, header Header) {
+    buf.WriteBytes(header.Magic[:])
+    buf.WriteUint16(header.ChunkX)
+    buf.WriteUint16(header.ChunkY)
+}
+
+func WriteZone(buf *gbuf.GBuf, zone Zone) {
+    // Write all tiles
+    for _, tile := range zone.Tiles {
+        buf.WriteUint16(uint16(tile))
+    }
+    
+    // Write all objects
+    for _, obj := range zone.Objs {
+        buf.WriteUint16(uint16(obj))
+    }
+}
+
+func ReadZone(buf *gbuf.GBuf) (Zone, error) {
+    tiles := [256]Tile{}
+    objs := [256]Obj{}
+    
+    // Read all tiles
+    for idx := range 256 {
+        internalId, err := buf.ReadUint16()
+        if err != nil {
+            return Zone{}, err
+        }
+        tiles[idx] = Tile(internalId)
+    }
+    
+    // Read all objects
+    for idx := range 256 {
+        internalId, err := buf.ReadUint16()
+        if err != nil {
+            return Zone{}, err
+        }
+        objs[idx] = Obj(internalId)
+    }
+    
+    return Zone{Tiles: tiles, Objs: objs}, nil
+}
+```
+
+<Note>
+  Maps are divided into 16x16 chunks. Each chunk is stored in a separate `.grpgmap` file.
+</Note>
+
+## Format Comparison
+
+| Format | Magic Number | Primary Use | Variable Length |
+|--------|--------------|-------------|------------------|
+| GRPGTEX | `GRPGTEX\x00` | Texture images | Yes |
+| GRPGOBJ | `GRPGOBJ\x00` | Game objects | Yes |
+| GRPGNPC | `GRPGNPC\x00` | NPCs | Yes |
+| GRPGITEM | `GRPGITEM` | Inventory items | Yes |
+| GRPGMAP | `GRPGMAP\x00\x00` | Map chunks | Fixed (1024 bytes) |
+
+## Design Principles
+
+### Binary Efficiency
+
+- **Compact Storage**: Binary formats use significantly less space than JSON/XML
+- **Fast Loading**: Direct memory mapping without parsing overhead
+- **Type Safety**: Fixed-width integers prevent overflow issues
+
+### Extensibility
+
+- **Version Agnostic**: Magic numbers allow format detection
+- **Flag-based Features**: Objects use bitflags for optional features
+- **Length-prefixed Data**: Variable-length fields are prefixed with their size
+
+### Consistency
+
+- **Common Patterns**: All formats use similar structure (Header → Count → Items)
+- **Shared Buffer**: All formats use the same GBuf abstraction
+- **Big Endian**: Consistent byte ordering across all formats
+
+<Warning>
+  Modifying binary formats requires updating both client and server. There is no backward compatibility mechanism.
+</Warning>
+
+## Working with Formats
+
+### Creating a New Format
+
+To create a new binary format:
+
+1. Define a unique 8-byte magic number
+2. Create a header struct
+3. Define the data struct
+4. Implement `WriteHeader` and `Write[Type]` functions
+5. Implement `ReadHeader` and `Read[Type]` functions
+6. Add tests using the `_test.go` pattern
+
+### Reading Binary Files
+
+```go
+// Read file into memory
+data, err := os.ReadFile("assets/textures.grpgtex")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Create GBuf
+buf := gbuf.NewGBuf(data)
+
+// Read header
+header, err := grpgtex.ReadHeader(buf)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Read textures
+textures, err := grpgtex.ReadTextures(buf)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Writing Binary Files
+
+```go
+// Create empty buffer
+buf := gbuf.NewEmptyGBuf()
+
+// Write header
+grpgtex.WriteHeader(buf)
+
+// Write textures
+textures := []grpgtex.Texture{
+    {InternalIdString: []byte("grass"), InternalIdInt: 1, ImageBytes: pngData},
+}
+grpgtex.WriteTextures(buf, textures)
+
+// Write to file
+os.WriteFile("assets/textures.grpgtex", buf.Bytes(), 0644)
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Server" icon="server" href="/components/server">
+    Learn how the server loads these formats
+  </Card>
+  <Card title="Client" icon="desktop" href="/components/client">
+    Understand client-side asset loading
+  </Card>
+  <Card title="Networking" icon="network-wired" href="/components/networking">
+    See how GBuf is used for network packets
+  </Card>
+</CardGroup>

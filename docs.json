@@ -1,122 +1,113 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "GRPG",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#8B4513",
+    "light": "#CD853F",
+    "dark": "#5C2E0A"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/grian32/grpg"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/grian32/grpg"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "architecture"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Components",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "components/server",
+              "components/client",
+              "components/data-formats",
+              "components/networking"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Development Tools",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "tools/data-packer",
+              "tools/map-editor",
+              "tools/assets-server"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Game Systems",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "systems/content-scripting",
+              "systems/npcs",
+              "systems/objects",
+              "systems/inventories",
+              "systems/skills"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-content",
+              "guides/custom-objects",
+              "guides/map-creation",
+              "guides/asset-pipeline"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Data Formats",
             "pages": [
-              "api-reference/introduction"
+              "api/gbuf",
+              "api/grpgtex",
+              "api/grpgtile",
+              "api/grpgobj",
+              "api/grpgnpc",
+              "api/grpgitem",
+              "api/grpgmap"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Server API",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/server/game-state",
+              "api/server/scripts",
+              "api/server/network-handlers"
+            ]
+          },
+          {
+            "group": "Client API",
+            "pages": [
+              "api/client/game-loop",
+              "api/client/rendering",
+              "api/client/network"
+            ]
+          },
+          {
+            "group": "CLI Tools",
+            "pages": [
+              "api/cli/data-packer-commands"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

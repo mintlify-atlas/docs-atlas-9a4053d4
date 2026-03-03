@@ -1,0 +1,352 @@
+---
+title: Rendering
+description: Client rendering system and scene management
+---
+
+The GRPG client uses a scene-based rendering system where different screens (login, gameplay) are implemented as scenes that handle their own rendering logic.
+
+## Scene Interface
+
+All scenes implement the `GScene` interface:
+
+```go shared/scene.go:5-10
+type GScene interface {
+	Setup()
+	Cleanup()
+	Update() error
+	Draw(screen *ebiten.Image)
+}
+```
+
+### Methods
+
+- `Setup()`: Initialize scene resources (fonts, textures, UI components)
+- `Cleanup()`: Dispose of scene resources when switching scenes
+- `Update()`: Handle input and update scene state (called every tick)
+- `Draw(screen *ebiten.Image)`: Render the scene to the screen
+
+## Scene Manager
+
+The `GSceneManager` handles transitions between different scenes:
+
+```go shared/scene.go:12-23
+type GSceneManager struct {
+	CurrentScene GScene
+}
+
+func (gsm *GSceneManager) SwitchTo(other GScene) {
+	if gsm.CurrentScene != nil {
+		gsm.CurrentScene.Cleanup()
+	}
+
+	other.Setup()
+	gsm.CurrentScene = other
+}
+```
+
+When switching scenes, the manager:
+1. Calls `Cleanup()` on the current scene (if any)
+2. Calls `Setup()` on the new scene
+3. Updates the current scene reference
+
+## Login Screen
+
+The login screen is the initial scene shown when the client starts.
+
+### Structure
+
+```go game/loginscreen.go:16-29
+type LoginScreen struct {
+	LoginButton     *gebitenui.GButton
+	UsernameTextbox *gebitenui.GTextbox
+	Font48          *gebitenui.GFont
+	Font24          *gebitenui.GFont
+	HalfWidth       float64
+	HalfHeight      float64
+	GRPGTextX       float64
+	EnterNameTextX  float64
+	FailedTextX     float64
+	LoginName       string
+	Game            *shared.Game
+}
+```
+
+### Rendering
+
+The login screen renders:
+- Background color (RGB: 17, 33, 43)
+- "GRPG" title text (48pt font)
+- "Enter Name Below" prompt (24pt font)
+- Username textbox
+- Login button
+- Error message if login fails
+
+```go game/loginscreen.go:112-124
+func (l *LoginScreen) Draw(screen *ebiten.Image) {
+	bgColor := util.ValuesRGB(17, 33, 43)
+
+	screen.Fill(bgColor)
+	l.LoginButton.Draw(screen)
+	l.UsernameTextbox.Draw(screen)
+
+	l.Font48.Draw(screen, "GRPG", l.GRPGTextX, l.HalfHeight-375, color.White)
+	l.Font24.Draw(screen, "Enter Name Below", l.EnterNameTextX, l.HalfHeight-275, color.White)
+	if l.Game.ShowFailedLogin {
+		l.Font24.Draw(screen, "Login failed. Name already taken.", l.FailedTextX, float64(l.Game.ScreenHeight)*0.95, util.ValuesRGB(255, 0, 0))
+	}
+}
+```
+
+## Playground (Main Game Scene)
+
+The playground scene handles the main gameplay rendering.
+
+### Structure
+
+```go game/playground.go:19-37
+type Playground struct {
+	Font16           *gebitenui.GFont
+	Font18           *gebitenui.GFont
+	Font20           *gebitenui.GFont
+	Font24           *gebitenui.GFont
+	Game             *shared.Game
+	GameframeRight   *ebiten.Image
+	GameframeBottom  *ebiten.Image
+	SkillIcons       map[shared.Skill]*gebitenui.GHoverTexture
+	InventoryButton  *gebitenui.GTextureButton
+	SkillsButton     *gebitenui.GTextureButton
+	PlayerTextures   map[shared.Direction]*ebiten.Image
+	Textures         map[uint16]*ebiten.Image
+	Zones            map[util.Vector2I]grpgmap.Zone
+	CameraTarget     util.Vector2
+	PrevCameraTarget util.Vector2
+	WorldImage       *ebiten.Image
+	CurrActionString string
+}
+```
+
+### Rendering Pipeline
+
+The playground uses a multi-layer rendering approach:
+
+```go game/playground.go:145-159
+func (p *Playground) Draw(screen *ebiten.Image) {
+	p.WorldImage.Clear()
+
+	drawWorld(p, p.WorldImage)
+	drawOtherPlayers(p, p.WorldImage)
+	drawPlayer(p, p.WorldImage)
+
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(-p.CameraTarget.X, -p.CameraTarget.Y)
+	op.Filter = ebiten.FilterNearest
+
+	screen.DrawImage(p.WorldImage, op)
+
+	drawGameFrame(p, screen)
+}
+```
+
+#### Rendering Order
+
+1. **World** (`drawWorld`): Tiles, objects, and NPCs
+2. **Other Players** (`drawOtherPlayers`): Remote players with walking animations
+3. **Local Player** (`drawPlayer`): Local player with walking animations and name tag
+4. **Camera Transform**: Apply camera offset to world
+5. **Game Frame** (`drawGameFrame`): UI overlay (inventory, skills, talkbox)
+
+### Camera System
+
+The camera follows the player with smooth scrolling:
+
+```go game/playground.go:161-195
+func updateCamera(p *Playground, crossedZone bool) {
+	player := p.Game.Player
+
+	var cameraX = 4 * p.Game.TileSize
+	var cameraY = 4 * p.Game.TileSize
+
+	if player.RealX <= 12*p.Game.TileSize {
+		cameraX = util.MinI(player.RealX-(9*p.Game.TileSize), 0)
+	}
+
+	if player.RealY <= 12*p.Game.TileSize {
+		cameraY = util.MinI(player.RealY-(9*p.Game.TileSize), 0)
+	}
+
+	const speed = 16.0
+
+	if crossedZone {
+		p.CameraTarget.X = float64(cameraX)
+		p.CameraTarget.Y = float64(cameraY)
+	} else {
+		if p.CameraTarget.X < float64(cameraX) {
+			p.CameraTarget.X += speed
+		} else if p.CameraTarget.X > float64(cameraX) {
+			p.CameraTarget.X -= speed
+		}
+
+		if p.CameraTarget.Y < float64(cameraY) {
+			p.CameraTarget.Y += speed
+		} else if p.CameraTarget.Y > float64(cameraY) {
+			p.CameraTarget.Y -= speed
+		}
+	}
+
+	p.PrevCameraTarget = p.CameraTarget
+}
+```
+
+The camera:
+- Centers on the player when near the center of a zone
+- Snaps instantly when crossing zone boundaries
+- Smoothly interpolates at 16 pixels per frame otherwise
+
+### World Rendering
+
+The world is rendered tile-by-tile for the current 16x16 zone:
+
+```go game/playground.go:210-256
+func drawWorld(p *Playground, screen *ebiten.Image) {
+	player := p.Game.Player
+
+	mapTiles := p.Zones[util.Vector2I{X: p.Game.Player.ChunkX, Y: p.Game.Player.ChunkY}]
+
+	for i := range 256 {
+		localX := int32(i % 16)
+		localY := int32(i / 16)
+
+		dx := localX * p.Game.TileSize
+		dy := localY * p.Game.TileSize
+
+		texId := p.Game.Tiles[uint16(mapTiles.Tiles[i])].TexId
+		tex := p.Textures[texId]
+		util.DrawImage(screen, tex, dx, dy)
+
+		worldPos := util.Vector2I{
+			X: localX + (player.ChunkX * 16),
+			Y: localY + (player.ChunkY * 16),
+		}
+
+		obj := mapTiles.Objs[i]
+		if obj != 0 {
+			trackedObj, ok := p.Game.TrackedObjs[worldPos]
+			var state uint16 = 0
+			if ok {
+				state = uint16(trackedObj.State)
+			}
+			objTexId := p.Game.Objs[uint16(mapTiles.Objs[i])].Textures[state]
+			objTex := p.Textures[objTexId]
+			util.DrawImage(screen, objTex, dx, dy)
+		} else {
+			trackedNpc, ok := p.Game.TrackedNpcs[worldPos]
+			if ok {
+				npcTexId := trackedNpc.NpcData.TextureId
+				util.DrawImage(screen, p.Textures[npcTexId], dx, dy)
+			}
+		}
+	}
+}
+```
+
+For each tile:
+1. Render base tile texture
+2. If an object exists, render object with appropriate state texture
+3. If no object but NPC exists, render NPC texture
+
+### Player Animation
+
+Players are rendered with 4-frame walking animations:
+
+```go game/playground.go:258-277
+func drawPlayer(p *Playground, screen *ebiten.Image) {
+	player := p.Game.Player
+
+	const frameSize = 64
+	srcX := int(player.CurrFrame) * frameSize
+	sourceRec := image.Rectangle{
+		Min: image.Point{
+			X: srcX,
+			Y: 0,
+		},
+		Max: image.Point{
+			X: srcX + frameSize,
+			Y: frameSize,
+		},
+	}
+	sub := util.SubImage(p.PlayerTextures[player.Facing], sourceRec)
+	util.DrawImage(screen, sub, player.RealX, player.RealY)
+
+	p.Font16.Draw(screen, player.Name, float64(player.RealX), float64(player.RealY), color.White)
+}
+```
+
+Each player texture contains 4 frames (0-3) arranged horizontally, showing different walk cycle poses.
+
+### Game Frame UI
+
+The game frame includes:
+- Right panel: Inventory or skills display
+- Bottom panel: Current action, talkbox, player coordinates
+- Inventory/Skills toggle buttons
+
+```go game/playground.go:300-349
+func drawGameFrame(p *Playground, screen *ebiten.Image) {
+	player := p.Game.Player
+	util.DrawImage(screen, p.GameframeRight, 768, 0)
+
+	if p.Game.GameframeContainerRenderType == shared.Inventory {
+		var currItemRealPosX int32 = 768 + 64
+		var currItemRealPosY int32 = 64
+
+		for idx, item := range p.Game.Player.Inventory {
+			if item.ItemId == 0 {
+				continue
+			}
+			data := p.Game.Items[item.ItemId]
+			tex := p.Textures[data.Texture]
+			util.DrawImage(screen, tex, currItemRealPosX, currItemRealPosY)
+			p.Font16.Draw(screen, fmt.Sprintf("%d", item.Count), float64(currItemRealPosX+16), float64(currItemRealPosY), color.White)
+
+			currItemRealPosX += 64
+			if (idx+1)%4 == 0 {
+				currItemRealPosY += 64
+				currItemRealPosX = 768 + 64
+			}
+		}
+	} else if p.Game.GameframeContainerRenderType == shared.Skills {
+		for _, si := range p.SkillIcons {
+			si.Draw(screen)
+		}
+		for i := shared.Foraging; i <= shared.Foraging; i++ {
+			p.Font16.Draw(screen, fmt.Sprintf("%d", p.Game.Skills[i].Level), 768+64+32, 64+48, util.Yellow)
+		}
+	}
+
+	util.DrawImage(screen, p.GameframeBottom, 0, 768)
+
+	talkbox := p.Game.Talkbox
+	p.Font20.Draw(screen, p.CurrActionString, 110, 768+28+3, color.White)
+	if talkbox.Active {
+		p.Font24.Draw(screen, talkbox.CurrentName, 110+332, 768+28+3, color.White)
+		p.Font24.Draw(screen, talkbox.CurrentMessage, 90, 840, color.White)
+	}
+	p.InventoryButton.Draw(screen)
+	p.SkillsButton.Draw(screen)
+
+	playerCoords := fmt.Sprintf("X: %d, Y: %d, Facing: %s", player.X, player.Y, player.Facing.String())
+	p.Font24.Draw(screen, playerCoords, 768, 800, color.White)
+}
+```
+
+## Screen Layout
+
+- **Game world viewport**: 768x768 pixels (12x12 tiles visible)
+- **Right panel**: 384 pixels wide (x: 768-1152)
+- **Bottom panel**: 192 pixels tall (y: 768-960)
+- **Total screen**: 1152x960 pixels
+
+## See Also
+
+- [Game Loop](/api/client/game-loop) - Main game loop implementation
+- [Network](/api/client/network) - Network packet handling

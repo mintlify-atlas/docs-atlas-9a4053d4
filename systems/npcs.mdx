@@ -1,0 +1,230 @@
+---
+title: 'NPCs'
+description: 'Non-player character system with movement and dialogue'
+---
+
+NPCs (Non-Player Characters) are interactive entities that can move around the world and engage in dialogue with players.
+
+## NPC Structure
+
+### GameNpc
+
+The server-side NPC representation:
+
+```go server-go/shared/npc.go
+type GameNpc struct {
+	Pos         util.Vector2I
+	NpcData     *grpgnpc.Npc
+	ChunkPos    util.Vector2I
+	WanderRange uint8
+}
+
+type NpcMove struct {
+	From util.Vector2I
+	To   util.Vector2I
+}
+```
+
+<ParamField path="Pos" type="Vector2I">
+  Current position of the NPC in world coordinates
+</ParamField>
+
+<ParamField path="NpcData" type="*grpgnpc.Npc">
+  Reference to the NPC's static data (name, texture, ID)
+</ParamField>
+
+<ParamField path="ChunkPos" type="Vector2I">
+  The chunk coordinates containing this NPC (for efficient spatial queries)
+</ParamField>
+
+<ParamField path="WanderRange" type="uint8">
+  Maximum distance in tiles the NPC can wander from its spawn point
+</ParamField>
+
+### NPC Data Format
+
+NPC definitions are stored in the GRPGNPC data format:
+
+```go data-go/grpgnpc/grpgnpc.go
+type Npc struct {
+	NpcId     uint16
+	Name      string
+	TextureId uint16
+}
+```
+
+<ParamField path="NpcId" type="uint16">
+  Unique identifier for the NPC type
+</ParamField>
+
+<ParamField path="Name" type="string">
+  Display name shown to players
+</ParamField>
+
+<ParamField path="TextureId" type="uint16">
+  Reference to the sprite texture for rendering
+</ParamField>
+
+## Spawning NPCs
+
+NPCs are spawned during server initialization using the scripting system:
+
+```go server-go/content/test_npc.go
+func init() {
+	scripts.SpawnNpc(scripts.TEST, 3, 3, 2)
+	// Spawns at position (3, 3) with wander range of 2 tiles
+}
+```
+
+During initialization, the ScriptManager processes spawn requests:
+
+```go server-go/scripts/script_manager.go
+for _, reg := range pendingNpcSpawns {
+	npcData, ok := npcs[uint16(reg.npcId)]
+	if !ok {
+		log.Printf("unknown npc %d for npcSpawn", reg.npcId)
+		continue
+	}
+
+	pos := util.Vector2I{X: reg.x, Y: reg.y}
+	chunkPos := util.Vector2I{X: pos.X / 16, Y: pos.Y / 16}
+
+	game.TrackedNpcs[pos] = &shared.GameNpc{
+		Pos:         pos,
+		NpcData:     npcData,
+		ChunkPos:    chunkPos,
+		WanderRange: reg.wanderRange,
+	}
+}
+```
+
+<Info>
+NPCs are tracked using their position as the key in `game.TrackedNpcs` map. This allows O(1) lookup when a player interacts with an NPC.
+</Info>
+
+## Movement System
+
+### Wander Range
+
+NPCs can wander within a configurable radius from their spawn point:
+
+- The `WanderRange` field defines the maximum distance in tiles
+- Movement is constrained to a square area: spawn point ± wander range
+- Example: spawn at (3,3) with range 2 allows movement between (1,1) and (5,5)
+
+<Tip>
+Set `WanderRange` to 0 for stationary NPCs that never move.
+</Tip>
+
+### Chunk-based Tracking
+
+NPCs store their chunk position for efficient spatial queries:
+
+```go
+chunkPos := util.Vector2I{X: pos.X / 16, Y: pos.Y / 16}
+```
+
+The 16x16 chunk system enables:
+- Efficient player visibility checks
+- Network packet optimization (only send updates for nearby chunks)
+- Spatial partitioning for collision detection
+
+## Dialogue System
+
+NPCs can engage in scripted dialogue with players. See the [Content Scripting](/systems/content-scripting) page for details on implementing NPC conversations.
+
+### Example Dialogue
+
+```go server-go/content/test_npc.go
+scripts.OnTalkNpc(scripts.TEST, func(ctx *scripts.NpcTalkCtx) {
+	ctx.ClearDialogueQueue()
+
+	ctx.TalkPlayer("hello, test")
+	ctx.TalkNpc("...")
+	ctx.TalkPlayer("C U")
+
+	ctx.StartDialogue()
+})
+```
+
+Dialogue flows are managed through a queue system:
+
+```go server-go/shared/dialog_queue.go
+type DialogueQueue struct {
+	Index       uint16
+	MaxIndex    uint16
+	ActiveNpcId uint16
+	Dialogues   []Dialogue
+}
+
+type Dialogue struct {
+	Type    DialogueType
+	Content string
+}
+```
+
+## Data Format
+
+NPCs are loaded from the GRPGNPC binary format with the following structure:
+
+```
+[Header: "GRPGNPC\x00" (8 bytes)]
+[NPC Count: uint16]
+[For each NPC:]
+  [NPC ID: uint16]
+  [Name: length-prefixed string]
+  [Texture ID: uint16]
+```
+
+### Reading NPCs
+
+```go data-go/grpgnpc/grpgnpc.go
+func ReadNpcs(buf *gbuf.GBuf) ([]Npc, error) {
+	npcLen, err := buf.ReadUint16()
+	if err != nil {
+		return nil, err
+	}
+
+	npcs := make([]Npc, npcLen)
+
+	for idx := range npcLen {
+		id, err1 := buf.ReadUint16()
+		name, err2 := buf.ReadString()
+		textureId, err3 := buf.ReadUint16()
+
+		if err := cmp.Or(err1, err2, err3); err != nil {
+			return nil, err
+		}
+		npcs[idx] = Npc{
+			NpcId:     id,
+			Name:      name,
+			TextureId: textureId,
+		}
+	}
+
+	return npcs, nil
+}
+```
+
+## Client Synchronization
+
+NPC state is synchronized to clients through network packets:
+
+- Initial NPC data sent when player enters chunk
+- Movement updates sent to all players in affected chunks
+- Dialogue updates sent only to the interacting player
+
+<Warning>
+NPC position changes must update both `Pos` and `ChunkPos`. Failing to update chunk position will break spatial queries.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Content Scripting" icon="code" href="/systems/content-scripting">
+    Learn how to script NPC behavior and dialogue
+  </Card>
+  <Card title="Objects" icon="cube" href="/systems/objects">
+    Explore the interactive object system
+  </Card>
+</CardGroup>

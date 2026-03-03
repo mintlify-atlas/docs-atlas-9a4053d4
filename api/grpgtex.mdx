@@ -1,0 +1,377 @@
+---
+title: "GRPGTEX Format"
+description: "Texture atlas binary format for GRPG game assets"
+---
+
+## Overview
+
+GRPGTEX is the binary format for storing texture atlases in GRPG. Each texture contains an identifier (both string and integer) and compressed image data in JXL (JPEG XL) format. This format is used to package all game textures into a single loadable asset.
+
+## Binary Format Structure
+
+```
+[8 bytes: Magic Header "GRPGTEX\0"]
+[4 bytes: Texture Count (uint32)]
+[Texture Array:]
+  For each texture:
+    [4 bytes: ID String Length (uint32)]
+    [N bytes: ID String (UTF-8)]
+    [2 bytes: ID Integer (uint16)]
+    [4 bytes: Image Data Length (uint32)]
+    [M bytes: Image Data (JXL format)]
+```
+
+## Type Definitions
+
+### Header
+
+```go
+type Header struct {
+    Magic [8]byte
+}
+```
+
+<ParamField path="Magic" type="[8]byte">
+  Magic number identifier: `"GRPGTEX\0"` (GRPGTEX followed by null byte)
+</ParamField>
+
+### Texture
+
+```go
+type Texture struct {
+    InternalIdString []byte
+    InternalIdInt    uint16
+    ImageBytes       []byte
+}
+```
+
+<ParamField path="InternalIdString" type="[]byte">
+  UTF-8 encoded string identifier for the texture (e.g., "grass", "stone")
+</ParamField>
+
+<ParamField path="InternalIdInt" type="uint16">
+  Numeric identifier for the texture, used for efficient lookups
+</ParamField>
+
+<ParamField path="ImageBytes" type="[]byte">
+  Compressed image data in JXL (JPEG XL) format
+</ParamField>
+
+### Methods
+
+#### Equals
+
+```go
+func (t Texture) Equals(other Texture) bool
+```
+
+Compares two textures for equality based on their ID string and image bytes.
+
+<ParamField path="other" type="Texture" required>
+  The texture to compare against
+</ParamField>
+
+**Returns:** `bool` - True if both textures have identical ID strings and image data
+
+## Functions
+
+### WriteHeader
+
+```go
+func WriteHeader(buf *gbuf.GBuf)
+```
+
+Writes the GRPGTEX magic header to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write the header to
+</ParamField>
+
+**Binary Output:**
+```
+[0x47, 0x52, 0x50, 0x47, 0x54, 0x45, 0x58, 0x00]
+"G    R    P    G    T    E    X    \0"
+```
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+grpgtex.WriteHeader(buf)
+// Buffer contains magic: []byte{'G', 'R', 'P', 'G', 'T', 'E', 'X', 0}
+```
+
+### ReadHeader
+
+```go
+func ReadHeader(buf *gbuf.GBuf) (Header, error)
+```
+
+Reads and validates the GRPGTEX header from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read the header from
+</ParamField>
+
+**Returns:**
+- `Header` - The parsed header structure
+- `error` - Error if insufficient data or invalid format
+
+**Example:**
+```go
+data, _ := os.ReadFile("textures.grpgtex")
+buf := gbuf.NewGBuf(data)
+header, err := grpgtex.ReadHeader(buf)
+if err != nil {
+    log.Fatal("Invalid GRPGTEX file")
+}
+```
+
+### WriteTextures
+
+```go
+func WriteTextures(buf *gbuf.GBuf, textures []Texture)
+```
+
+Writes an array of textures to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write textures to
+</ParamField>
+
+<ParamField path="textures" type="[]Texture" required>
+  Array of textures to serialize
+</ParamField>
+
+**Binary Output Format:**
+```
+[4 bytes: uint32 count]
+For each texture:
+  [4 bytes: uint32 string ID length]
+  [N bytes: string ID]
+  [2 bytes: uint16 integer ID]
+  [4 bytes: uint32 image data length]
+  [M bytes: image data]
+```
+
+**Example:**
+```go
+textures := []grpgtex.Texture{
+    {
+        InternalIdString: []byte("grass"),
+        InternalIdInt:    0,
+        ImageBytes:       grassJxlBytes,
+    },
+    {
+        InternalIdString: []byte("stone"),
+        InternalIdInt:    1,
+        ImageBytes:       stoneJxlBytes,
+    },
+}
+
+buf := gbuf.NewEmptyGBuf()
+grpgtex.WriteHeader(buf)
+grpgtex.WriteTextures(buf, textures)
+
+// Save to file
+os.WriteFile("textures.grpgtex", buf.Bytes(), 0644)
+```
+
+### ReadTextures
+
+```go
+func ReadTextures(buf *gbuf.GBuf) ([]Texture, error)
+```
+
+Reads an array of textures from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read textures from (positioned after the header)
+</ParamField>
+
+**Returns:**
+- `[]Texture` - Array of parsed texture objects
+- `error` - Error if data is malformed or incomplete
+
+**Example:**
+```go
+data, _ := os.ReadFile("textures.grpgtex")
+buf := gbuf.NewGBuf(data)
+
+// Read header first
+header, _ := grpgtex.ReadHeader(buf)
+
+// Read textures
+textures, err := grpgtex.ReadTextures(buf)
+if err != nil {
+    log.Fatal("Failed to read textures")
+}
+
+for _, tex := range textures {
+    fmt.Printf("Texture: %s (ID: %d)\n", tex.InternalIdString, tex.InternalIdInt)
+}
+```
+
+## Complete Usage Example
+
+### Creating a Texture Atlas
+
+```go
+package main
+
+import (
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgtex"
+    "os"
+)
+
+func main() {
+    // Load image files
+    grassJxl, _ := os.ReadFile("assets/grass.jxl")
+    stoneJxl, _ := os.ReadFile("assets/stone.jxl")
+    waterJxl, _ := os.ReadFile("assets/water.jxl")
+
+    // Create texture array
+    textures := []grpgtex.Texture{
+        {
+            InternalIdString: []byte("grass"),
+            InternalIdInt:    0,
+            ImageBytes:       grassJxl,
+        },
+        {
+            InternalIdString: []byte("stone"),
+            InternalIdInt:    1,
+            ImageBytes:       stoneJxl,
+        },
+        {
+            InternalIdString: []byte("water"),
+            InternalIdInt:    2,
+            ImageBytes:       waterJxl,
+        },
+    }
+
+    // Write to buffer
+    buf := gbuf.NewEmptyGBuf()
+    grpgtex.WriteHeader(buf)
+    grpgtex.WriteTextures(buf, textures)
+
+    // Save to file
+    os.WriteFile("textures.grpgtex", buf.Bytes(), 0644)
+}
+```
+
+### Loading a Texture Atlas
+
+```go
+package main
+
+import (
+    "fmt"
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgtex"
+    "os"
+)
+
+func main() {
+    // Load file
+    data, err := os.ReadFile("textures.grpgtex")
+    if err != nil {
+        panic(err)
+    }
+
+    buf := gbuf.NewGBuf(data)
+
+    // Read header
+    header, err := grpgtex.ReadHeader(buf)
+    if err != nil {
+        panic("Invalid GRPGTEX file")
+    }
+
+    // Validate magic
+    expectedMagic := [8]byte{'G', 'R', 'P', 'G', 'T', 'E', 'X', 0}
+    if header.Magic != expectedMagic {
+        panic("Invalid magic number")
+    }
+
+    // Read textures
+    textures, err := grpgtex.ReadTextures(buf)
+    if err != nil {
+        panic("Failed to read textures")
+    }
+
+    // Process textures
+    fmt.Printf("Loaded %d textures:\n", len(textures))
+    for _, tex := range textures {
+        fmt.Printf("  - %s (ID: %d, Size: %d bytes)\n",
+            string(tex.InternalIdString),
+            tex.InternalIdInt,
+            len(tex.ImageBytes))
+    }
+}
+```
+
+## Binary Format Details
+
+### File Extension
+
+`.grpgtex`
+
+### Magic Number
+
+`GRPGTEX\0` (ASCII: `0x47 0x52 0x50 0x47 0x54 0x45 0x58 0x00`)
+
+### Image Format
+
+Textures use **JXL (JPEG XL)** format for image compression:
+- Modern, efficient compression
+- Lossless and lossy modes
+- Better compression than PNG/JPEG
+- Native support in modern browsers and tools
+
+### Texture Indexing
+
+Each texture has two identifiers:
+
+1. **String ID:** Human-readable name (e.g., "grass", "stone_brick")
+   - Used during development and debugging
+   - UTF-8 encoded for internationalization
+
+2. **Integer ID:** Numeric identifier (uint16)
+   - Used for efficient runtime lookups
+   - Range: 0-65535 unique textures
+   - Referenced by tiles, objects, NPCs, and items
+
+### Size Limits
+
+- **Maximum Textures:** 4,294,967,295 (uint32 count)
+- **Maximum String ID Length:** 4,294,967,295 bytes (uint32 length)
+- **Maximum Image Size:** 4,294,967,295 bytes (uint32 length)
+
+Practical limits are much lower due to memory and performance constraints.
+
+## Error Handling
+
+Common errors when reading GRPGTEX files:
+
+- **Invalid magic number:** File is not a GRPGTEX file or is corrupted
+- **Insufficient data:** File is truncated or incomplete
+- **Invalid texture count:** Corrupted texture count field
+- **String/image length mismatch:** Declared length exceeds remaining data
+
+```go
+header, err := grpgtex.ReadHeader(buf)
+if err != nil {
+    // Handle invalid header
+}
+
+textures, err := grpgtex.ReadTextures(buf)
+if err != nil {
+    // Handle texture read error
+}
+```
+
+## Related Formats
+
+- [GRPGTILE](/api/grpgtile) - References textures by integer ID
+- [GRPGOBJ](/api/grpgobj) - References textures for object states
+- [GRPGNPC](/api/grpgnpc) - References textures for NPC sprites
+- [GRPGITEM](/api/grpgitem) - References textures for item icons

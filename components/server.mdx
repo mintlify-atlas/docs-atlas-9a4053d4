@@ -1,0 +1,391 @@
+---
+title: Server Architecture
+description: Understanding GRPG's server implementation, game loop, and player management
+---
+
+## Overview
+
+The GRPG server is a TCP-based game server written in Go that manages the game world state, player connections, and game logic. It uses a tick-based architecture running at 60 ticks per second with SQLite for player data persistence.
+
+## Server Components
+
+### Game State
+
+The core game state is managed by the `Game` struct in `server/shared/game.go`:
+
+```go server/shared/game.go
+type Game struct {
+    Players      map[*Player]struct{}
+    Connections  map[net.Conn]*Player
+    MaxX         uint32
+    MaxY         uint32
+    Database     *sql.DB
+    TrackedObjs  map[util.Vector2I]*GameObj
+    TrackedNpcs  map[util.Vector2I]*GameNpc
+    Mu           sync.RWMutex
+    CollisionMap map[util.Vector2I]struct{}
+    Objs         map[util.Vector2I]struct{}
+    TimedScripts map[uint32][]func()
+    NpcMoves     map[util.Vector2I][][]NpcMove
+    CurrentTick  uint32
+}
+```
+
+<Note>
+  The server uses a `sync.RWMutex` to handle concurrent access to game state from multiple goroutines.
+</Note>
+
+### Server Initialization
+
+The server initializes in the following sequence:
+
+1. **Database Setup** - Connects to SQLite and runs migrations
+2. **Asset Loading** - Loads game objects, NPCs, and maps from binary formats
+3. **Script Manager** - Initializes the scripting system for game logic
+4. **TCP Listener** - Starts listening on port 4422
+5. **Game Loop** - Launches the main game cycle goroutine
+
+```go server/main.go
+func main() {
+    // Database initialization
+    db, err := sql.Open("sqlite3", "./players.db")
+    g.Database = db
+    
+    // Run migrations
+    m, err := migrate.NewWithDatabaseInstance("file://db/migrations", "sqlite3", driver)
+    m.Up()
+    
+    // Load game assets
+    objs, err := LoadObjs(assetsDirectory + "assets/objs.grpgobj")
+    npcs, err := LoadNpcs(assetsDirectory + "assets/npcs.grpgnpc")
+    LoadMaps(assetsDirectory+"maps/", g, objs)
+    
+    // Start game loop
+    packets := make(chan ChanPacket, 1000)
+    go cycle(packets)
+    
+    // Accept connections
+    listener, err := net.Listen("tcp", ":4422")
+    for {
+        conn, err := listener.Accept()
+        go handleClient(conn, g, packets)
+    }
+}
+```
+
+## Game Loop
+
+The server runs a tick-based game loop at approximately 60 ticks per second (every 60ms):
+
+```go server/main.go
+func cycle(packets chan ChanPacket) {
+    for {
+        expectedTime := time.Now().Add(60 * time.Millisecond)
+        
+        // Process all pending packets
+        processPackets:
+        for {
+            select {
+            case packet := <-packets:
+                buf := gbuf.NewGBuf(packet.Bytes)
+                packet.PacketData.Handler.Handle(buf, g, packet.Player, scriptManager)
+            default:
+                break processPackets
+            }
+        }
+        
+        // Execute timed scripts
+        timed, ok := g.TimedScripts[g.CurrentTick]
+        if ok {
+            for _, script := range timed {
+                script()
+            }
+        }
+        
+        // Process NPC movements (every 300 ticks)
+        if g.CurrentTick >= 300 {
+            // NPC movement logic...
+        }
+        
+        g.CurrentTick++
+        
+        // Sleep to maintain tick rate
+        diff := time.Until(expectedTime)
+        if diff > 0 {
+            time.Sleep(diff)
+        }
+    }
+}
+```
+
+<Info>
+  The game loop processes packets, runs scripts, and updates game state in a single-threaded manner to avoid race conditions.
+</Info>
+
+## Player Management
+
+### Connection Handling
+
+Each client connection is handled in a separate goroutine:
+
+```go server/main.go
+func handleClient(conn net.Conn, game *shared.Game, packets chan ChanPacket) {
+    defer conn.Close()
+    reader := bufio.NewReader(conn)
+    
+    for {
+        // Read opcode
+        opcode, err := reader.ReadByte()
+        if err != nil {
+            // Clean up on disconnect
+            player, exists := game.Connections[conn]
+            if exists {
+                player.SaveToDB(game.Database)
+                delete(game.Players, player)
+            }
+            return
+        }
+        
+        // Handle login packet specially
+        if opcode == 0x01 {
+            handleLogin(reader, conn, game)
+            continue
+        }
+        
+        // Read packet data
+        packetData := c2s.Packets[opcode]
+        bytes := make([]byte, packetData.Length)
+        io.ReadFull(reader, bytes)
+        
+        // Queue packet for processing
+        player := game.Connections[conn]
+        packets <- ChanPacket{
+            Bytes:      bytes,
+            Player:     player,
+            PacketData: packetData,
+        }
+    }
+}
+```
+
+### Player Login
+
+The login process validates player names and loads data from the database:
+
+```go server/main.go
+func handleLogin(reader *bufio.Reader, conn net.Conn, game *shared.Game) {
+    // Read name length and name
+    nameLenBytes := make([]byte, 4)
+    io.ReadFull(reader, nameLenBytes)
+    nameLen := binary.BigEndian.Uint32(nameLenBytes)
+    name := make([]byte, nameLen)
+    io.ReadFull(reader, name)
+    
+    // Check for duplicate names
+    for player, _ := range game.Players {
+        if player.Name == string(name) {
+            network.SendPacket(conn, &s2c.LoginRejected{}, game)
+            return
+        }
+    }
+    
+    // Create player and load from database
+    player := &shared.Player{
+        Pos:      util.Vector2I{X: 0, Y: 0},
+        ChunkPos: util.Vector2I{X: 0, Y: 0},
+        Name:     string(name),
+        Conn:     conn,
+    }
+    
+    player.LoadFromDB(game.Database)
+    
+    game.Players[player] = struct{}{}
+    game.Connections[conn] = player
+    
+    // Send initial state
+    network.SendPacket(conn, &s2c.LoginAccepted{}, game)
+    network.UpdatePlayersByChunk(player.ChunkPos, game, &s2c.PlayersUpdate{ChunkPos: player.ChunkPos})
+    network.SendPacket(player.Conn, &s2c.ObjUpdate{ChunkPos: player.ChunkPos, Rebuild: true}, game)
+    network.SendPacket(player.Conn, &s2c.NpcUpdate{ChunkPos: player.ChunkPos}, game)
+}
+```
+
+## Database Persistence
+
+Player data is persisted to SQLite with the following methods:
+
+### Loading Player Data
+
+```go server/shared/player.go
+func (p *Player) LoadFromDB(db *sql.DB) error {
+    row := db.QueryRow("SELECT x, y, inventory, skills FROM players WHERE name = ?", p.Name)
+    
+    var loadedX, loadedY int
+    var invBlob, skillsBlob []byte
+    err := row.Scan(&loadedX, &loadedY, &invBlob, &skillsBlob)
+    
+    if err == sql.ErrNoRows {
+        return nil // New player
+    }
+    
+    pos := util.Vector2I{X: uint32(loadedX), Y: uint32(loadedY)}
+    chunkPos := util.Vector2I{X: uint32(loadedX / 16), Y: uint32(loadedY / 16)}
+    inv, err := DecodeInventoryFromBlob(invBlob)
+    skills, err := DecodeSkillsFromBlob(skillsBlob)
+    
+    p.Pos = pos
+    p.ChunkPos = chunkPos
+    p.Inventory = inv
+    p.Skills = skills
+    
+    return nil
+}
+```
+
+### Saving Player Data
+
+```go server/shared/player.go
+func (p *Player) SaveToDB(db *sql.DB) error {
+    tx, err := db.Begin()
+    defer tx.Rollback()
+    
+    // Check if player exists
+    row := tx.QueryRow("SELECT player_id FROM players WHERE name = ?", p.Name)
+    var existingId int
+    err = row.Scan(&existingId)
+    
+    if err == sql.ErrNoRows {
+        // Insert new player
+        stmt, _ := tx.Prepare("INSERT INTO players(player_id, name, x, y, inventory, skills) VALUES (NULL, ?, ?, ?, ?)")
+        stmt.Exec(p.Name, p.Pos.X, p.Pos.Y, p.Inventory.EncodeToBlob(), EncodeSkillsToBlob(p.Skills))
+    } else {
+        // Update existing player
+        stmt, _ := tx.Prepare("UPDATE players SET x=?, y=?, inventory=?, skills=? WHERE player_id=?")
+        stmt.Exec(p.Pos.X, p.Pos.Y, p.Inventory.EncodeToBlob(), EncodeSkillsToBlob(p.Skills), existingId)
+    }
+    
+    return tx.Commit()
+}
+```
+
+<Warning>
+  Player data is saved when the connection is lost. The server does not auto-save during gameplay.
+</Warning>
+
+## Scripting System
+
+The server uses a scripting system for game logic and interactions:
+
+```go server/scripts/script_manager.go
+type ScriptManager struct {
+    InteractScripts map[ObjConstant]ObjInteractFunc
+    NpcTalkScripts  map[NpcConstant]NpcTalkFunc
+}
+
+func NewScriptManager(game *shared.Game, npcs map[uint16]*grpgnpc.Npc) *ScriptManager {
+    s := &ScriptManager{
+        InteractScripts: make(map[ObjConstant]ObjInteractFunc),
+        NpcTalkScripts:  make(map[NpcConstant]NpcTalkFunc),
+    }
+    
+    // Register interaction scripts
+    for _, reg := range pendingObjInteracts {
+        s.InteractScripts[reg.id] = reg.fn
+    }
+    
+    // Register NPC talk scripts
+    for _, reg := range pendingNpcTalks {
+        s.NpcTalkScripts[reg.id] = reg.fn
+    }
+    
+    return s
+}
+```
+
+### Object Interaction
+
+When a player interacts with an object, the server executes the associated script:
+
+```go server/network/c2s/interact.go
+func (i *Interact) Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, scriptManager *scripts.ScriptManager) {
+    objId, _ := buf.ReadUint16()
+    x, _ := buf.ReadUint32()
+    y, _ := buf.ReadUint32()
+    
+    objPos := util.Vector2I{X: x, Y: y}
+    
+    // Validate player is facing the object
+    if player.GetFacingCoord() != objPos {
+        return
+    }
+    
+    // Execute interaction script
+    script := scriptManager.InteractScripts[scripts.ObjConstant(objId)]
+    script(scripts.NewObjInteractCtx(game, player, objPos))
+}
+```
+
+## Chunk-Based Updates
+
+The server uses chunk-based updates to only send data to players in relevant areas:
+
+```go server/network/network.go
+func UpdatePlayersByChunk(chunkPos util.Vector2I, game *shared.Game, packet s2c.Packet) {
+    for player, _ := range game.Players {
+        if player.ChunkPos == chunkPos {
+            SendPacket(player.Conn, packet, game)
+        }
+    }
+}
+```
+
+Chunks are 16x16 tiles. When a player moves between chunks, the server:
+1. Sends object/NPC updates for the new chunk
+2. Updates player lists in both old and new chunks
+3. Clears any active dialogues
+
+<Tip>
+  Chunk-based updates significantly reduce network traffic by only sending relevant game state changes.
+</Tip>
+
+## Performance Considerations
+
+### Concurrency Model
+
+- **Connection Handlers**: Each client connection runs in its own goroutine
+- **Packet Queue**: A buffered channel (capacity 1000) queues packets for processing
+- **Game Loop**: Single-threaded to avoid race conditions
+- **Mutex Protection**: Read/write locks protect shared game state
+
+### Packet Processing
+
+Packets are processed in batches during each tick:
+
+```go
+processPackets:
+for {
+    select {
+    case packet := <-packets:
+        buf := gbuf.NewGBuf(packet.Bytes)
+        packet.PacketData.Handler.Handle(buf, g, packet.Player, scriptManager)
+    default:
+        break processPackets
+    }
+}
+```
+
+This drains the packet queue before proceeding with the rest of the game loop.
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Networking" icon="network-wired" href="/components/networking">
+    Learn about the C2S and S2C packet system
+  </Card>
+  <Card title="Data Formats" icon="database" href="/components/data-formats">
+    Understand GRPG's binary data formats
+  </Card>
+  <Card title="Client" icon="desktop" href="/components/client">
+    Explore the client architecture
+  </Card>
+</CardGroup>

@@ -1,0 +1,483 @@
+---
+title: "GRPGMAP Format"
+description: "Map chunk binary format for GRPG game world zones"
+---
+
+## Overview
+
+GRPGMAP is the binary format for storing map chunks (zones) in GRPG. Each map file represents a 16x16 grid of zones, where each zone contains 256 tiles (16x16) and 256 object placements. This hierarchical structure allows for efficient streaming and rendering of large game worlds.
+
+## Binary Format Structure
+
+```
+[8 bytes: Magic Header "GRPGMAP\0"]
+[2 bytes: Chunk X Coordinate (uint16)]
+[2 bytes: Chunk Y Coordinate (uint16)]
+[Zone Data: 256 zones in reading order (left-to-right, top-to-bottom)]
+  For each zone:
+    [512 bytes: Tile Layer (256 × uint16)]
+    [512 bytes: Object Layer (256 × uint16)]
+```
+
+Total zone data: 256 zones × 1024 bytes = 262,144 bytes per map chunk
+
+## Type Definitions
+
+### Header
+
+```go
+type Header struct {
+    Magic  [8]byte
+    ChunkX uint16
+    ChunkY uint16
+}
+```
+
+<ParamField path="Magic" type="[8]byte">
+  Magic number identifier: `"GRPGMAP\0"` (GRPGMAP followed by null byte)
+</ParamField>
+
+<ParamField path="ChunkX" type="uint16">
+  X coordinate of this map chunk in the world grid
+</ParamField>
+
+<ParamField path="ChunkY" type="uint16">
+  Y coordinate of this map chunk in the world grid
+</ParamField>
+
+### Tile
+
+```go
+type Tile uint16
+```
+
+References a tile definition by its `TileId` from the [GRPGTILE](/api/grpgtile) format.
+
+### Obj
+
+```go
+type Obj uint16
+```
+
+References an object definition by its `ObjId` from the [GRPGOBJ](/api/grpgobj) format. A value of 0 typically indicates no object.
+
+### Zone
+
+```go
+type Zone struct {
+    Tiles [256]Tile
+    Objs  [256]Obj
+}
+```
+
+<ParamField path="Tiles" type="[256]Tile">
+  16x16 grid of tile IDs representing the ground/terrain layer. Indexed in row-major order (left-to-right, top-to-bottom).
+</ParamField>
+
+<ParamField path="Objs" type="[256]Obj">
+  16x16 grid of object IDs representing placed objects. Value 0 = no object. Indexed in row-major order.
+</ParamField>
+
+## Functions
+
+### WriteHeader
+
+```go
+func WriteHeader(buf *gbuf.GBuf, header Header)
+```
+
+Writes the GRPGMAP header to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write the header to
+</ParamField>
+
+<ParamField path="header" type="Header" required>
+  The header structure containing magic number and chunk coordinates
+</ParamField>
+
+**Binary Output:**
+```
+[8 bytes: "GRPGMAP\0"]
+[2 bytes: ChunkX]
+[2 bytes: ChunkY]
+```
+
+**Example:**
+```go
+header := grpgmap.Header{
+    Magic:  [8]byte{'G', 'R', 'P', 'G', 'M', 'A', 'P', 0x00},
+    ChunkX: 0,
+    ChunkY: 0,
+}
+buf := gbuf.NewEmptyGBuf()
+grpgmap.WriteHeader(buf, header)
+```
+
+### ReadHeader
+
+```go
+func ReadHeader(buf *gbuf.GBuf) (Header, error)
+```
+
+Reads and parses the GRPGMAP header from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read the header from
+</ParamField>
+
+**Returns:**
+- `Header` - The parsed header structure with magic and chunk coordinates
+- `error` - Error if insufficient data is available
+
+**Example:**
+```go
+data, _ := os.ReadFile("map_0_0.grpgmap")
+buf := gbuf.NewGBuf(data)
+header, err := grpgmap.ReadHeader(buf)
+if err != nil {
+    log.Fatal("Invalid GRPGMAP file")
+}
+fmt.Printf("Chunk at (%d, %d)\n", header.ChunkX, header.ChunkY)
+```
+
+### WriteZone
+
+```go
+func WriteZone(buf *gbuf.GBuf, zone Zone)
+```
+
+Writes a single zone (256 tiles + 256 objects) to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write the zone to
+</ParamField>
+
+<ParamField path="zone" type="Zone" required>
+  The zone structure containing tile and object grids
+</ParamField>
+
+**Binary Output:**
+```
+[512 bytes: 256 × uint16 tile IDs]
+[512 bytes: 256 × uint16 object IDs]
+```
+
+**Example:**
+```go
+zone := grpgmap.Zone{}
+// Fill with grass tiles (ID 1)
+for i := range 256 {
+    zone.Tiles[i] = grpgmap.Tile(1)
+    zone.Objs[i] = 0 // No objects
+}
+
+buf := gbuf.NewEmptyGBuf()
+grpgmap.WriteZone(buf, zone)
+```
+
+### ReadZone
+
+```go
+func ReadZone(buf *gbuf.GBuf) (Zone, error)
+```
+
+Reads a single zone from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read the zone from
+</ParamField>
+
+**Returns:**
+- `Zone` - The parsed zone with tile and object grids
+- `error` - Error if insufficient data is available
+
+**Example:**
+```go
+zone, err := grpgmap.ReadZone(buf)
+if err != nil {
+    log.Fatal("Failed to read zone")
+}
+
+// Access tile at position (5, 3) - row 3, column 5
+tileId := zone.Tiles[3*16 + 5]
+objId := zone.Objs[3*16 + 5]
+```
+
+## Complete Usage Example
+
+### Creating a Map Chunk
+
+```go
+package main
+
+import (
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgmap"
+    "os"
+)
+
+func main() {
+    // Create header for chunk (0, 0)
+    header := grpgmap.Header{
+        Magic:  [8]byte{'G', 'R', 'P', 'G', 'M', 'A', 'P', 0x00},
+        ChunkX: 0,
+        ChunkY: 0,
+    }
+
+    buf := gbuf.NewEmptyGBuf()
+    grpgmap.WriteHeader(buf, header)
+
+    // Create 256 zones (16x16 grid of zones)
+    for zoneIdx := range 256 {
+        zone := grpgmap.Zone{}
+
+        // Fill zone with tiles
+        for i := range 256 {
+            // Checkerboard pattern: grass (1) and stone (2)
+            row := i / 16
+            col := i % 16
+            if (row+col)%2 == 0 {
+                zone.Tiles[i] = grpgmap.Tile(1) // Grass
+            } else {
+                zone.Tiles[i] = grpgmap.Tile(2) // Stone
+            }
+
+            // Sparse object placement
+            if i%17 == 0 {
+                zone.Objs[i] = grpgmap.Obj(5) // Tree
+            } else {
+                zone.Objs[i] = 0 // No object
+            }
+        }
+
+        grpgmap.WriteZone(buf, zone)
+    }
+
+    // Save to file
+    os.WriteFile("map_0_0.grpgmap", buf.Bytes(), 0644)
+}
+```
+
+### Loading a Map Chunk
+
+```go
+package main
+
+import (
+    "fmt"
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgmap"
+    "os"
+)
+
+func main() {
+    // Load file
+    data, err := os.ReadFile("map_0_0.grpgmap")
+    if err != nil {
+        panic(err)
+    }
+
+    buf := gbuf.NewGBuf(data)
+
+    // Read header
+    header, err := grpgmap.ReadHeader(buf)
+    if err != nil {
+        panic("Invalid GRPGMAP file")
+    }
+
+    fmt.Printf("Loading chunk (%d, %d)\n", header.ChunkX, header.ChunkY)
+
+    // Read all 256 zones
+    zones := make([]grpgmap.Zone, 256)
+    for i := range 256 {
+        zone, err := grpgmap.ReadZone(buf)
+        if err != nil {
+            panic(fmt.Sprintf("Failed to read zone %d", i))
+        }
+        zones[i] = zone
+    }
+
+    // Access specific tile in the world
+    // Example: Get tile at world position (25, 18)
+    // Zone coordinates: (25/16, 18/16) = (1, 1)
+    // Tile within zone: (25%16, 18%16) = (9, 2)
+    zoneX := 25 / 16
+    zoneY := 18 / 16
+    tileX := 25 % 16
+    tileY := 18 % 16
+
+    zoneIndex := zoneY*16 + zoneX
+    tileIndex := tileY*16 + tileX
+
+    tileId := zones[zoneIndex].Tiles[tileIndex]
+    objId := zones[zoneIndex].Objs[tileIndex]
+
+    fmt.Printf("Position (25,18): Tile=%d, Obj=%d\n", tileId, objId)
+}
+```
+
+## Binary Format Details
+
+### File Extension
+
+`.grpgmap`
+
+Common naming convention: `map_{chunkX}_{chunkY}.grpgmap`
+
+### Magic Number
+
+`GRPGMAP\0` (ASCII: `0x47 0x52 0x50 0x47 0x4D 0x41 0x50 0x00`)
+
+### File Size
+
+Every GRPGMAP file has a fixed size:
+- **Header:** 12 bytes (8 magic + 2 ChunkX + 2 ChunkY)
+- **Zone Data:** 262,144 bytes (256 zones × 1024 bytes)
+- **Total:** 262,156 bytes (256.012 KB)
+
+### Coordinate System
+
+#### Chunk Coordinates
+- Each chunk represents a 256×256 tile area in the world
+- ChunkX, ChunkY identify the chunk's position in the world
+- World position = (ChunkX × 256, ChunkY × 256)
+
+#### Zone Layout
+
+Zones within a chunk are stored in **row-major order**:
+```
+Zone Index = ZoneY × 16 + ZoneX
+
+Example 4×4 section:
+  0   1   2   3
+ 16  17  18  19
+ 32  33  34  35
+ 48  49  50  51
+```
+
+#### Tile Layout
+
+Tiles within a zone are stored in **row-major order**:
+```
+Tile Index = TileY × 16 + TileX
+
+Example 4×4 section:
+  0   1   2   3
+ 16  17  18  19
+ 32  33  34  35
+ 48  49  50  51
+```
+
+### World Position Calculation
+
+```go
+// Convert world position to chunk, zone, and tile coordinates
+func WorldToCoords(worldX, worldY int) (chunkX, chunkY, zoneX, zoneY, tileX, tileY int) {
+    chunkX = worldX / 256
+    chunkY = worldY / 256
+    localX := worldX % 256
+    localY := worldY % 256
+    zoneX = localX / 16
+    zoneY = localY / 16
+    tileX = localX % 16
+    tileY = localY % 16
+    return
+}
+
+// Get zone index from zone coordinates
+func ZoneIndex(zoneX, zoneY int) int {
+    return zoneY*16 + zoneX
+}
+
+// Get tile index from tile coordinates
+func TileIndex(tileX, tileY int) int {
+    return tileY*16 + tileX
+}
+```
+
+### Example Binary Layout
+
+```
+Offset  | Bytes                           | Description
+--------|----------------------------------|---------------------------
+0x00000 | 47 52 50 47 4D 41 50 00         | Magic "GRPGMAP\0"
+0x00008 | 00 01                           | ChunkX: 1
+0x0000A | 00 01                           | ChunkY: 1
+0x0000C | 00 00 00 01 00 00 ...           | Zone 0, Tile layer (512 bytes)
+0x0020C | 00 00 00 05 00 00 ...           | Zone 0, Object layer (512 bytes)
+0x0040C | 00 00 00 01 00 00 ...           | Zone 1, Tile layer (512 bytes)
+...     | ...                             | Zones 2-255
+```
+
+## Size Limits
+
+- **Chunk Coordinates:** 0-65,535 (uint16 range)
+- **World Size:** 65,536 × 65,536 chunks = 16,777,216 × 16,777,216 tiles
+- **Tile IDs:** 0-65,535 (uint16 range)
+- **Object IDs:** 0-65,535 (uint16 range)
+
+## Streaming and Performance
+
+### Chunk Loading
+
+For large worlds, load chunks dynamically:
+
+```go
+type ChunkCache struct {
+    chunks map[[2]uint16][]grpgmap.Zone
+}
+
+func (c *ChunkCache) LoadChunk(chunkX, chunkY uint16) error {
+    filename := fmt.Sprintf("map_%d_%d.grpgmap", chunkX, chunkY)
+    data, err := os.ReadFile(filename)
+    if err != nil {
+        return err
+    }
+
+    buf := gbuf.NewGBuf(data)
+    header, _ := grpgmap.ReadHeader(buf)
+
+    zones := make([]grpgmap.Zone, 256)
+    for i := range 256 {
+        zones[i], _ = grpgmap.ReadZone(buf)
+    }
+
+    c.chunks[[2]uint16{chunkX, chunkY}] = zones
+    return nil
+}
+```
+
+### Memory Usage
+
+- **Per Chunk:** ~262 KB
+- **Loaded Chunks:** 9 chunks (3×3 around player) = ~2.3 MB
+- **100 Chunks:** ~25.6 MB
+
+## Error Handling
+
+Common errors when reading GRPGMAP files:
+
+- **Invalid magic number:** File is not a GRPGMAP file
+- **Wrong file size:** File should be exactly 262,156 bytes
+- **Insufficient data:** File is truncated
+- **Invalid chunk coordinates:** Coordinates exceed expected world bounds
+
+```go
+header, err := grpgmap.ReadHeader(buf)
+if err != nil {
+    // Handle: file too small for header
+}
+
+zone, err := grpgmap.ReadZone(buf)
+if err != nil {
+    // Handle: not enough data for 1024 bytes
+}
+```
+
+## Related Formats
+
+- [GRPGTILE](/api/grpgtile) - Tile definitions referenced by tile IDs
+- [GRPGOBJ](/api/grpgobj) - Object definitions referenced by object IDs
+- [GRPGTEX](/api/grpgtex) - Textures used by tiles and objects
+- [GBuf](/api/gbuf) - Binary buffer used for serialization

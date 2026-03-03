@@ -1,0 +1,437 @@
+---
+title: "GRPGNPC Format"
+description: "NPC definition binary format for GRPG non-player characters"
+---
+
+## Overview
+
+GRPGNPC is the binary format for defining non-player characters (NPCs) in GRPG. Each NPC has a unique identifier, a name, and a reference to a sprite texture. NPCs can be merchants, quest givers, enemies, or any other interactive character in the game.
+
+## Binary Format Structure
+
+```
+[8 bytes: Magic Header "GRPGNPC\0"]
+[2 bytes: NPC Count (uint16)]
+[NPC Array:]
+  For each NPC:
+    [2 bytes: NPC ID (uint16)]
+    [4 bytes: Name Length (uint32)]
+    [N bytes: Name (UTF-8 string)]
+    [2 bytes: Texture ID (uint16)]
+```
+
+## Type Definitions
+
+### Header
+
+```go
+type Header struct {
+    Magic [8]byte
+}
+```
+
+<ParamField path="Magic" type="[8]byte">
+  Magic number identifier: `"GRPGNPC\0"` (GRPGNPC followed by null byte)
+</ParamField>
+
+### Npc
+
+```go
+type Npc struct {
+    NpcId     uint16
+    Name      string
+    TextureId uint16
+}
+```
+
+<ParamField path="NpcId" type="uint16">
+  Unique identifier for this NPC (0-65535)
+</ParamField>
+
+<ParamField path="Name" type="string">
+  Human-readable name of the NPC (e.g., "corey", "grian", "merchant_bob")
+</ParamField>
+
+<ParamField path="TextureId" type="uint16">
+  Reference to a sprite texture in the GRPGTEX atlas by its InternalIdInt
+</ParamField>
+
+## Functions
+
+### WriteHeader
+
+```go
+func WriteHeader(buf *gbuf.GBuf)
+```
+
+Writes the GRPGNPC magic header to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write the header to
+</ParamField>
+
+**Binary Output:**
+```
+[0x47, 0x52, 0x50, 0x47, 0x4E, 0x50, 0x43, 0x00]
+"G    R    P    G    N    P    C    \0"
+```
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+grpgnpc.WriteHeader(buf)
+```
+
+### ReadHeader
+
+```go
+func ReadHeader(buf *gbuf.GBuf) (Header, error)
+```
+
+Reads and validates the GRPGNPC header from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read the header from
+</ParamField>
+
+**Returns:**
+- `Header` - The parsed header structure
+- `error` - Error if insufficient data is available
+
+**Example:**
+```go
+data, _ := os.ReadFile("npcs.grpgnpc")
+buf := gbuf.NewGBuf(data)
+header, err := grpgnpc.ReadHeader(buf)
+if err != nil {
+    log.Fatal("Invalid GRPGNPC file")
+}
+```
+
+### WriteNpcs
+
+```go
+func WriteNpcs(buf *gbuf.GBuf, npcs []Npc)
+```
+
+Writes an array of NPC definitions to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write NPCs to
+</ParamField>
+
+<ParamField path="npcs" type="[]Npc" required>
+  Array of NPC definitions to serialize
+</ParamField>
+
+**Binary Output Format:**
+```
+[2 bytes: uint16 count]
+For each NPC:
+  [2 bytes: uint16 NPC ID]
+  [4 bytes: uint32 name length]
+  [N bytes: UTF-8 name]
+  [2 bytes: uint16 texture ID]
+```
+
+**Example:**
+```go
+npcs := []grpgnpc.Npc{
+    {
+        NpcId:     1,
+        Name:      "corey",
+        TextureId: 8,
+    },
+    {
+        NpcId:     2,
+        Name:      "grian",
+        TextureId: 9,
+    },
+}
+
+buf := gbuf.NewEmptyGBuf()
+grpgnpc.WriteHeader(buf)
+grpgnpc.WriteNpcs(buf, npcs)
+
+os.WriteFile("npcs.grpgnpc", buf.Bytes(), 0644)
+```
+
+### ReadNpcs
+
+```go
+func ReadNpcs(buf *gbuf.GBuf) ([]Npc, error)
+```
+
+Reads an array of NPC definitions from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read NPCs from (positioned after the header)
+</ParamField>
+
+**Returns:**
+- `[]Npc` - Array of parsed NPC definitions
+- `error` - Error if data is malformed or incomplete
+
+**Example:**
+```go
+data, _ := os.ReadFile("npcs.grpgnpc")
+buf := gbuf.NewGBuf(data)
+
+header, _ := grpgnpc.ReadHeader(buf)
+npcs, err := grpgnpc.ReadNpcs(buf)
+if err != nil {
+    log.Fatal("Failed to read NPCs")
+}
+
+for _, npc := range npcs {
+    fmt.Printf("NPC %d: %s (Texture: %d)\n", npc.NpcId, npc.Name, npc.TextureId)
+}
+```
+
+## Complete Usage Example
+
+### Creating NPC Definitions
+
+```go
+package main
+
+import (
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgnpc"
+    "os"
+)
+
+func main() {
+    // Define NPCs
+    npcs := []grpgnpc.Npc{
+        {
+            NpcId:     0,
+            Name:      "merchant",
+            TextureId: 100, // References texture ID 100
+        },
+        {
+            NpcId:     1,
+            Name:      "guard",
+            TextureId: 101,
+        },
+        {
+            NpcId:     2,
+            Name:      "quest_giver",
+            TextureId: 102,
+        },
+        {
+            NpcId:     3,
+            Name:      "enemy_goblin",
+            TextureId: 103,
+        },
+    }
+
+    // Write to buffer
+    buf := gbuf.NewEmptyGBuf()
+    grpgnpc.WriteHeader(buf)
+    grpgnpc.WriteNpcs(buf, npcs)
+
+    // Save to file
+    os.WriteFile("npcs.grpgnpc", buf.Bytes(), 0644)
+}
+```
+
+### Loading NPC Definitions
+
+```go
+package main
+
+import (
+    "fmt"
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgnpc"
+    "os"
+)
+
+func main() {
+    // Load file
+    data, err := os.ReadFile("npcs.grpgnpc")
+    if err != nil {
+        panic(err)
+    }
+
+    buf := gbuf.NewGBuf(data)
+
+    // Read and validate header
+    header, err := grpgnpc.ReadHeader(buf)
+    if err != nil {
+        panic("Invalid GRPGNPC file")
+    }
+
+    expectedMagic := [8]byte{'G', 'R', 'P', 'G', 'N', 'P', 'C', 0x00}
+    if header.Magic != expectedMagic {
+        panic("Invalid magic number")
+    }
+
+    // Read NPCs
+    npcs, err := grpgnpc.ReadNpcs(buf)
+    if err != nil {
+        panic("Failed to read NPCs")
+    }
+
+    // Build lookup maps
+    npcsByID := make(map[uint16]grpgnpc.Npc)
+    npcsByName := make(map[string]grpgnpc.Npc)
+
+    for _, npc := range npcs {
+        npcsByID[npc.NpcId] = npc
+        npcsByName[npc.Name] = npc
+        fmt.Printf("Loaded NPC: %s (ID: %d, Texture: %d)\n",
+            npc.Name, npc.NpcId, npc.TextureId)
+    }
+
+    // Look up NPC by name
+    if npc, exists := npcsByName["merchant"]; exists {
+        fmt.Printf("Merchant uses texture %d\n", npc.TextureId)
+    }
+}
+```
+
+## Binary Format Details
+
+### File Extension
+
+`.grpgnpc`
+
+### Magic Number
+
+`GRPGNPC\0` (ASCII: `0x47 0x52 0x50 0x47 0x4E 0x50 0x43 0x00`)
+
+### Field Order
+
+NPC fields are serialized in this order:
+1. **NPC ID** (2 bytes) - Stored first for efficient lookup
+2. **Name** (length-prefixed string) - Human-readable identifier
+3. **Texture ID** (2 bytes) - Reference to sprite texture
+
+### String Encoding
+
+NPC names use the GBuf length-prefixed string format:
+- 4-byte uint32 length
+- N bytes of UTF-8 encoded string data
+
+This allows for international characters in NPC names.
+
+### Texture References
+
+The `TextureId` field references sprite textures from the GRPGTEX format:
+- Must match a texture's `InternalIdInt` value
+- Invalid references will cause rendering errors
+- Texture atlas must be loaded before NPC definitions
+
+### Example Binary Layout
+
+```
+Offset | Bytes                           | Description
+-------|----------------------------------|---------------------------
+0x00   | 47 52 50 47 4E 50 43 00         | Magic "GRPGNPC\0"
+0x08   | 00 02                           | Count: 2 NPCs
+0x0A   | 00 01                           | NPC ID: 1
+0x0C   | 00 00 00 05                     | Name length: 5
+0x10   | 63 6F 72 65 79                  | Name: "corey"
+0x15   | 00 08                           | Texture ID: 8
+0x17   | 00 02                           | NPC ID: 2
+0x19   | 00 00 00 05                     | Name length: 5
+0x1D   | 67 72 69 61 6E                  | Name: "grian"
+0x22   | 00 09                           | Texture ID: 9
+```
+
+## Size Limits
+
+- **Maximum NPCs:** 65,535 (uint16 count)
+- **Maximum NPC ID:** 65,535 (uint16 range)
+- **Maximum Texture ID:** 65,535 (uint16 range)
+- **Maximum Name Length:** 4,294,967,295 bytes (uint32 length, impractical)
+
+## NPC Placement
+
+NPCs are typically placed in the game world through:
+- Map metadata (not part of the GRPGMAP tile/object grid)
+- Spawn points defined in level data
+- Scripting systems that reference NPCs by ID
+
+Example usage:
+```go
+type NpcSpawn struct {
+    NpcId uint16  // References NPC definition
+    X     int32
+    Y     int32
+}
+
+spawns := []NpcSpawn{
+    {NpcId: 1, X: 100, Y: 200}, // Spawn "corey" at (100, 200)
+    {NpcId: 2, X: 150, Y: 250}, // Spawn "grian" at (150, 250)
+}
+```
+
+## NPC Behavior
+
+The GRPGNPC format only defines visual appearance. NPC behavior is typically defined separately:
+- AI scripts
+- Dialogue trees
+- Quest associations
+- Combat stats
+- Movement patterns
+
+These are usually stored in separate data structures that reference NPCs by `NpcId`.
+
+## Error Handling
+
+Common errors when reading GRPGNPC files:
+
+- **Invalid magic number:** File is not a GRPGNPC file
+- **Insufficient data:** File is truncated
+- **Invalid NPC count:** Corrupted count field
+- **String length mismatch:** Name length exceeds remaining data
+- **Invalid texture reference:** Texture ID doesn't exist in atlas
+
+```go
+header, err := grpgnpc.ReadHeader(buf)
+if err != nil {
+    // Handle: file too small, not enough bytes for header
+}
+
+npcs, err := grpgnpc.ReadNpcs(buf)
+if err != nil {
+    // Handle: corrupted NPC data, invalid string lengths
+}
+```
+
+## Performance Considerations
+
+### Lookup Maps
+
+For efficient NPC lookups at runtime, build index maps:
+
+```go
+// By ID for fast spawning
+npcsByID := make(map[uint16]grpgnpc.Npc)
+for _, npc := range npcs {
+    npcsByID[npc.NpcId] = npc
+}
+
+// By name for debugging/scripting
+npcsByName := make(map[string]grpgnpc.Npc)
+for _, npc := range npcs {
+    npcsByName[npc.Name] = npc
+}
+```
+
+### Memory Usage
+
+For games with thousands of NPCs:
+- Consider loading NPCs in chunks per region
+- Use NPC ID references instead of full structs
+- Share texture IDs across multiple NPC types
+
+## Related Formats
+
+- [GRPGTEX](/api/grpgtex) - Texture atlas referenced by `TextureId`
+- [GRPGOBJ](/api/grpgobj) - Similar format for interactive objects
+- [GRPGITEM](/api/grpgitem) - Item definitions that NPCs may trade
+- [GBuf](/api/gbuf) - Binary buffer used for serialization

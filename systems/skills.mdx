@@ -1,0 +1,404 @@
+---
+title: 'Skills'
+description: 'Character progression with XP and leveling system'
+---
+
+The skill system provides character progression through XP gain and leveling. Players earn experience by performing activities like foraging, with levels ranging from 1 to 75.
+
+## Skill Structure
+
+```go server-go/shared/skill.go
+type Skill uint8
+
+const (
+	Foraging Skill = iota
+)
+
+type SkillInfo struct {
+	Level uint8
+	XP    uint32
+}
+
+var ALL_SKILLS []Skill = []Skill { Foraging }
+```
+
+<ParamField path="Skill" type="uint8">
+  Enumeration of available skills (currently only Foraging)
+</ParamField>
+
+<ParamField path="Level" type="uint8">
+  Current skill level (1-75)
+</ParamField>
+
+<ParamField path="XP" type="uint32">
+  Total accumulated experience points (0-99,999,999)
+</ParamField>
+
+<Info>
+The `ALL_SKILLS` array tracks all available skills for iteration during save/load operations.
+</Info>
+
+## Adding Experience
+
+Players gain XP through scripted activities:
+
+```go server-go/shared/player.go
+func (p *Player) AddXp(skill Skill, xpAmount uint32) {
+	xp := p.Skills[skill].XP
+	if xp >= util.MAX_XP {
+		return
+	}
+
+	if xp + xpAmount >= util.MAX_XP {
+		p.Skills[skill].XP = util.MAX_XP
+		return
+	}
+
+	p.Skills[skill].XP = xp + xpAmount
+
+	newXp := p.Skills[skill].XP
+
+	if p.Skills[skill].Level < 75 {
+		for i := p.Skills[skill].Level; i < 74; i++ {
+			if newXp > util.LEVEL_XP[i] {
+				p.Skills[skill].Level = uint8(i + 1)
+				break
+			}
+		}
+	}
+}
+```
+
+### XP Gain Logic
+
+1. **Check max XP:** If already at 99,999,999, no XP is added
+2. **Add XP:** Increment current XP by the amount (capped at MAX_XP)
+3. **Level up:** If XP exceeds the next level threshold, increase level
+4. **Max level:** Level 75 is the maximum, no further leveling
+
+### Usage in Scripts
+
+Grant XP through the scripting API:
+
+```go server-go/scripts/context.go
+func (o *ObjInteractCtx) PlayerAddXp(skill shared.Skill, xpAmount uint32) {
+	o.player.AddXp(skill, xpAmount)
+	network.SendPacket(o.player.Conn, &s2c.SkillUpdate{
+		SkillIds: []shared.Skill{skill},
+		Player:   o.player,
+	}, o.game)
+}
+```
+
+Example from berry bush interaction:
+
+```go server-go/content/berry_bush.go
+scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+	if ctx.GetObjState() == 0 {
+		ctx.SetObjState(1)
+		ctx.PlayerInvAdd(scripts.BERRIES)
+		ctx.PlayerAddXp(shared.Foraging, 100) // Grant 100 Foraging XP
+		// ...
+	}
+})
+```
+
+<Tip>
+A `SkillUpdate` packet is automatically sent to notify the client of XP and level changes.
+</Tip>
+
+## Level Progression
+
+### XP Requirements
+
+Each level requires a specific total XP amount:
+
+```go server-go/util/xp.go
+var LEVEL_XP [75]uint32 = [75]uint32 {
+    0,        // Level 1
+    211,      // Level 2
+    1193,     // Level 3
+    3289,     // Level 4
+    6752,     // Level 5
+    11795,    // Level 6
+    // ... continues to level 75
+    9607040,  // Level 75
+}
+
+const MAX_XP uint32 = 99_999_999
+
+func GetXPForLevel(level uint8) uint32 {
+	return LEVEL_XP[level - 1]
+}
+```
+
+The XP curve is designed to:
+- Start fast for early levels (level 2 at 211 XP)
+- Gradually increase difficulty (level 10 at 51,273 XP)
+- Require significant effort for high levels (level 75 at 9,607,040 XP)
+
+### Level Calculation
+
+Levels are calculated by comparing current XP to the threshold table:
+
+```go
+if p.Skills[skill].Level < 75 {
+	for i := p.Skills[skill].Level; i < 74; i++ {
+		if newXp > util.LEVEL_XP[i] {
+			p.Skills[skill].Level = uint8(i + 1)
+			break
+		}
+	}
+}
+```
+
+This algorithm:
+- Iterates from current level to 74
+- Finds the first threshold that hasn't been reached
+- Sets level to that threshold index + 1
+- Only checks once per XP gain (efficient for single level-ups)
+
+<Warning>
+This level calculation only handles single-level increases. If you grant enough XP to skip multiple levels at once, only the first new level will be applied.
+</Warning>
+
+## Persistence
+
+### Encoding to Database
+
+Skills are serialized to binary format:
+
+```go server-go/shared/skill.go
+func EncodeSkillsToBlob(skills map[Skill]*SkillInfo) []byte {
+	buf := gbuf.NewEmptyGBuf()
+
+	// Iterate through all skills in order
+	for i := Foraging; i <= Foraging; i++ {
+		buf.WriteByte(skills[i].Level)
+		buf.WriteUint32(skills[i].XP)
+	}
+
+	return buf.Bytes()
+}
+```
+
+Format per skill: 5 bytes
+```
+[Level: 1 byte]
+[XP: 4 bytes]
+```
+
+### Decoding from Database
+
+```go server-go/shared/skill.go
+func DecodeSkillsFromBlob(blob []byte) (map[Skill]*SkillInfo, error) {
+	// Handle pre-existing players without skill data
+	if len(blob) == 0 {
+		skills := make(map[Skill]*SkillInfo)
+		for i := Foraging; i <= Foraging; i++ {
+			skills[i] = &SkillInfo{
+				Level: 1,
+				XP:    0,
+			}
+		}
+		return skills, nil
+	}
+
+	buf := gbuf.NewGBuf(blob)
+	skills := make(map[Skill]*SkillInfo)
+
+	for i := Foraging; i <= Foraging; i++ {
+		level, err1 := buf.ReadByte()
+		xp, err2:= buf.ReadUint32()
+
+		if err := cmp.Or(err1, err2); err != nil {
+			return make(map[Skill]*SkillInfo), err
+		}
+
+		skills[i] = &SkillInfo{
+			Level: level,
+			XP: xp,
+		}
+	}
+
+	return skills, nil
+}
+```
+
+<Info>
+Empty blob handling allows backward compatibility with players created before the skill system was added.
+</Info>
+
+### Player Save/Load
+
+Skills are persisted alongside inventory and position:
+
+```go server-go/shared/player.go
+func (p *Player) LoadFromDB(db *sql.DB) error {
+	row := db.QueryRow("SELECT x, y, inventory, skills FROM players WHERE name = ?", p.Name)
+
+	var skillsBlob []byte
+	err := row.Scan(&loadedX, &loadedY, &invBlob, &skillsBlob)
+	// ...
+
+	skills, err := DecodeSkillsFromBlob(skillsBlob)
+	if err != nil {
+		return err
+	}
+
+	p.Skills = skills
+	return nil
+}
+
+func (p *Player) SaveToDB(db *sql.DB) error {
+	// ...
+	_, err = stmt.Exec(p.Name, p.Pos.X, p.Pos.Y, 
+		p.Inventory.EncodeToBlob(), 
+		EncodeSkillsToBlob(p.Skills))
+	// ...
+}
+```
+
+## Adding New Skills
+
+To add a new skill:
+
+1. **Add to enum:**
+```go
+const (
+	Foraging Skill = iota
+	Mining   // New skill
+)
+```
+
+2. **Update ALL_SKILLS:**
+```go
+var ALL_SKILLS []Skill = []Skill { Foraging, Mining }
+```
+
+3. **Update encoding loop:**
+```go
+for i := Foraging; i <= Mining; i++ {
+	// ...
+}
+```
+
+4. **Update decoding loop:**
+```go
+for i := Foraging; i <= Mining; i++ {
+	// ...
+}
+```
+
+<Warning>
+Adding new skills changes the binary format. Existing player data will need migration to include the new skill with default values.
+</Warning>
+
+## Client Synchronization
+
+Skill updates are sent via the `SkillUpdate` packet:
+
+```go
+network.SendPacket(o.player.Conn, &s2c.SkillUpdate{
+	SkillIds: []shared.Skill{skill},
+	Player:   o.player,
+}, o.game)
+```
+
+The packet includes:
+- Array of skill IDs that changed
+- Reference to player object (contains all skill data)
+- Client updates UI to show new XP/level
+
+## XP Table Reference
+
+<Accordion title="Full XP Table (Levels 1-75)">
+```go
+Level  1: 0 XP
+Level  2: 211 XP
+Level  3: 1,193 XP
+Level  4: 3,289 XP
+Level  5: 6,752 XP
+Level  6: 11,795 XP
+Level  7: 18,606 XP
+Level  8: 27,354 XP
+Level  9: 38,195 XP
+Level 10: 51,273 XP
+Level 11: 66,724 XP
+Level 12: 84,676 XP
+Level 13: 105,253 XP
+Level 14: 128,570 XP
+Level 15: 154,739 XP
+Level 16: 183,869 XP
+Level 17: 216,064 XP
+Level 18: 251,422 XP
+Level 19: 290,043 XP
+Level 20: 332,021 XP
+Level 21: 377,448 XP
+Level 22: 426,413 XP
+Level 23: 479,004 XP
+Level 24: 535,305 XP
+Level 25: 595,402 XP
+Level 26: 659,375 XP
+Level 27: 727,303 XP
+Level 28: 799,266 XP
+Level 29: 875,341 XP
+Level 30: 955,602 XP
+Level 31: 1,040,125 XP
+Level 32: 1,128,981 XP
+Level 33: 1,222,242 XP
+Level 34: 1,319,979 XP
+Level 35: 1,422,262 XP
+Level 36: 1,529,158 XP
+Level 37: 1,640,736 XP
+Level 38: 1,757,060 XP
+Level 39: 1,878,198 XP
+Level 40: 2,004,213 XP
+Level 41: 2,135,169 XP
+Level 42: 2,271,130 XP
+Level 43: 2,412,157 XP
+Level 44: 2,558,312 XP
+Level 45: 2,709,655 XP
+Level 46: 2,866,247 XP
+Level 47: 3,028,147 XP
+Level 48: 3,195,413 XP
+Level 49: 3,368,104 XP
+Level 50: 3,546,277 XP
+Level 51: 3,729,988 XP
+Level 52: 3,919,294 XP
+Level 53: 4,114,251 XP
+Level 54: 4,314,913 XP
+Level 55: 4,521,336 XP
+Level 56: 4,733,574 XP
+Level 57: 4,951,679 XP
+Level 58: 5,175,705 XP
+Level 59: 5,405,706 XP
+Level 60: 5,641,732 XP
+Level 61: 5,883,836 XP
+Level 62: 6,132,069 XP
+Level 63: 6,386,481 XP
+Level 64: 6,647,124 XP
+Level 65: 6,914,048 XP
+Level 66: 7,187,301 XP
+Level 67: 7,466,933 XP
+Level 68: 7,752,994 XP
+Level 69: 8,045,531 XP
+Level 70: 8,344,593 XP
+Level 71: 8,650,228 XP
+Level 72: 8,962,482 XP
+Level 73: 9,281,404 XP
+Level 74: 9,607,040 XP
+Level 75: Max level (XP cap: 99,999,999)
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Content Scripting" icon="code" href="/systems/content-scripting">
+    Learn how to grant XP through interactive content
+  </Card>
+  <Card title="Inventories" icon="boxes-stacked" href="/systems/inventories">
+    Explore the inventory system for storing rewards
+  </Card>
+</CardGroup>

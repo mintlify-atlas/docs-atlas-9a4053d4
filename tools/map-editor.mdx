@@ -1,0 +1,207 @@
+---
+title: 'Map Editor'
+description: 'GUI tool for creating and editing GRPG game maps'
+---
+
+## Overview
+
+The **Map Editor** is a graphical application for creating and editing GRPG game maps. It provides a visual interface for placing tiles and objects on a 16x16 grid to create map chunks.
+
+## Installation
+
+Build the map editor from source:
+
+```bash
+cd ~/workspace/source/map-editor
+go build -o map-editor
+```
+
+## Running the Editor
+
+Launch the map editor:
+
+```bash
+./map-editor
+```
+
+The editor window opens at 1640x1200 pixels with three main panels:
+- **Editor**: 16x16 grid for map editing
+- **Controls**: Action buttons and chunk coordinate inputs
+- **Selector**: Tabs for selecting tiles and objects
+
+## Interface Layout
+
+### Editor Panel
+
+The main editing area displays a 16x16 grid (256 tiles total) where you can place tiles and objects by clicking.
+
+### Controls Panel
+
+The controls panel provides the following buttons and inputs:
+
+**Asset Loading:**
+- **Load Textures**: Load a `.grpgtex` texture pack file
+- **Load Tiles**: Load a `.grpgtile` tiles definition file
+- **Load Objs**: Load a `.grpgobj` objects definition file
+
+**Map Operations:**
+- **Save Map**: Save the current map to a `.grpgmap` file
+- **Load Map**: Load an existing `.grpgmap` file
+
+**Editing Tools:**
+- **Set all empty tiles to currently selected**: Fill all empty tiles with the selected tile
+- **Clear Grid**: Wipe the entire grid (with confirmation dialog)
+- **Enable Eraser**: Activate eraser mode to remove tiles/objects
+
+**Chunk Coordinates:**
+- **Chunk X**: Input field for the map chunk's X coordinate
+- **Chunk Y**: Input field for the map chunk's Y coordinate
+
+<Note>
+  Both Chunk X and Chunk Y must be set before saving a map.
+</Note>
+
+### Selector Panel
+
+The selector panel has two tabs:
+
+**Tiles Tab:**
+- Displays all loaded tiles in a grid
+- Click a tile image to select it for placement
+- Shows the currently selected tile
+
+**Objs Tab:**
+- Displays all loaded objects in a grid
+- Objects show flags: `(s)` for STATE, `(i)` for INTERACT
+- Click an object image to select it for placement
+- Shows the currently selected object
+
+## Workflow
+
+<Steps>
+  <Step title="Load Assets">
+    Load the required asset files in order:
+    1. Click **Load Textures** and select your `.grpgtex` file
+    2. Click **Load Tiles** and select your `.grpgtile` file
+    3. Click **Load Objs** and select your `.grpgobj` file
+  </Step>
+  
+  <Step title="Set Chunk Coordinates">
+    Enter the chunk coordinates in the **Chunk X** and **Chunk Y** input fields.
+  </Step>
+  
+  <Step title="Place Tiles">
+    1. Switch to the **Tiles** tab in the Selector panel
+    2. Click a tile to select it
+    3. Click on the grid to place the tile
+    4. Repeat until all 256 tiles are filled
+  </Step>
+  
+  <Step title="Place Objects (Optional)">
+    1. Switch to the **Objs** tab in the Selector panel
+    2. Click an object to select it
+    3. Click on the grid to place the object
+  </Step>
+  
+  <Step title="Save Map">
+    Click **Save Map** to export your map as a `.grpgmap` file.
+  </Step>
+</Steps>
+
+## Editing Features
+
+### Tile Placement
+
+Tiles form the base layer of the map. Every grid cell must have a tile before the map can be saved.
+
+- Select a tile from the Tiles tab
+- Click on the grid to place it
+- The tile's texture is displayed in the grid cell
+
+### Object Placement
+
+Objects are placed on top of tiles and are optional.
+
+- Select an object from the Objs tab
+- Click on a grid cell to place the object
+- Objects can have multiple states (indicated by the STATE flag)
+- Interactive objects show an `(i)` flag
+
+### Eraser Mode
+
+Enable eraser mode to remove tiles or objects:
+
+1. Click **Enable Eraser**
+2. Click on grid cells to erase their contents
+3. Select a tile or object to exit eraser mode
+
+### Bulk Operations
+
+**Fill Empty Tiles:**
+- Select a tile
+- Click **Set all empty tiles to currently selected**
+- All unfilled tiles will be set to the selected tile
+
+**Clear Grid:**
+- Click **Clear Grid**
+- Confirm the dialog
+- All tiles and objects are removed from the grid
+
+## Map File Format
+
+Maps are saved in the `.grpgmap` binary format with the following structure:
+
+**Header:**
+- Magic: `GRPGMAP\x00` (8 bytes)
+- Chunk X: uint16 (2 bytes)
+- Chunk Y: uint16 (2 bytes)
+
+**Zone Data:**
+- Tiles: 256 tile IDs (uint8 each)
+- Objs: 256 object IDs (uint16 each, 0 = no object)
+
+<Info>
+  The map file references tiles and objects by their IDs from the loaded `.grpgtile` and `.grpgobj` files.
+</Info>
+
+## Validation
+
+The editor performs validation before saving:
+
+<Warning>
+  **All tiles must be filled**: You cannot save a map with empty tile slots.
+</Warning>
+
+<Warning>
+  **Chunk coordinates required**: Both Chunk X and Chunk Y must be set to valid values (not -1).
+</Warning>
+
+<Warning>
+  **Assets must be loaded**: Textures must be loaded before loading tiles or objects.
+</Warning>
+
+## Loading Existing Maps
+
+To load and edit an existing map:
+
+1. Load textures first (required)
+2. Click **Load Map**
+3. Select a `.grpgmap` file
+4. The chunk coordinates, tiles, and objects will be loaded into the editor
+5. Make your edits
+6. Save the map
+
+## Source Code
+
+The map editor source code is located at:
+```
+~/workspace/source/map-editor/
+```
+
+Key files:
+- `main.go:17` - Application entry point and UI layout
+- `map.go:12` - Map save/load functionality
+- `assets.go:33` - Asset loading (textures, tiles, objects)
+- `grid.go` - Grid rendering and interaction
+- `selector.go:27` - Tile and object selector tabs
+- `controls.go:11` - Control button implementations

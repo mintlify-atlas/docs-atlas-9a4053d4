@@ -1,0 +1,332 @@
+---
+title: Network
+description: Client-side network handling and packet processing
+---
+
+The GRPG client uses TCP connections to communicate with the server. Network packets are read asynchronously and processed each game tick.
+
+## Connection
+
+The client establishes a TCP connection to the server on startup:
+
+```go network/network_manager.go:18-25
+func StartConn() net.Conn {
+	netConn, err := net.Dial("tcp", "localhost:4422")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return netConn
+}
+```
+
+Default server address: `localhost:4422`
+
+## Packet Channel
+
+Packets are communicated between the network reader goroutine and the game loop via a buffered channel:
+
+```go network/network_manager.go:13-16
+type ChanPacket struct {
+	Buf        *gbuf.GBuf
+	PacketData s2c.PacketData
+}
+```
+
+### Fields
+
+- `Buf`: Binary buffer containing packet payload data
+- `PacketData`: Metadata about the packet (opcode, length, handler)
+
+## Reading Packets
+
+Packets are read in a separate goroutine that runs for the lifetime of the connection:
+
+```go network/network_manager.go:27-75
+func ReadServerPackets(conn net.Conn, packetChan chan<- ChanPacket) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	for {
+		opcode, err := reader.ReadByte()
+		if err != nil {
+			log.Println("error reading packet opcode, conn lost")
+			return
+		}
+
+		packetData, ok := s2c.Packets[opcode]
+		if !ok {
+			log.Printf("unknown opcode: %d\n", opcode)
+		}
+
+		var bytes []byte
+
+		if packetData.Length == -1 {
+			lenBytes := make([]byte, 2)
+			_, err = io.ReadFull(reader, lenBytes)
+
+			if err != nil {
+				log.Printf("Failed to read packet length for variable length packet with opcode %b, %v\n", opcode, err)
+				continue
+			}
+
+			packetLen := binary.BigEndian.Uint16(lenBytes)
+			bytes = make([]byte, packetLen)
+		} else {
+			bytes = make([]byte, packetData.Length)
+		}
+		_, err = io.ReadFull(reader, bytes)
+		if err != nil {
+			return
+		}
+
+		buf := gbuf.NewGBuf(bytes)
+
+		select {
+		case packetChan <- ChanPacket{
+			Buf:        buf,
+			PacketData: packetData,
+		}:
+		default:
+			return
+		}
+	}
+}
+```
+
+### Packet Format
+
+All packets follow this structure:
+
+1. **Opcode** (1 byte): Identifies the packet type
+2. **Length** (2 bytes, optional): For variable-length packets (when `PacketData.Length == -1`)
+3. **Payload** (variable): Packet-specific data
+
+Fixed-length packets skip the length prefix and use the predefined `PacketData.Length`.
+
+## Server-to-Client Packets
+
+All S2C packet handlers implement the `Packet` interface:
+
+```go network/s2c/packet.go:8-10
+type Packet interface {
+	Handle(buf *gbuf.GBuf, game *shared.Game)
+}
+```
+
+### Packet Registry
+
+```go network/s2c/packet.go:18-40
+var (
+	LoginAcceptedData   = PacketData{Opcode: 0x01, Length: 0, Handler: &LoginAccepted{}}
+	LoginRejectedData   = PacketData{Opcode: 0x02, Length: 0, Handler: &LoginRejected{}}
+	PlayersUpdateData   = PacketData{Opcode: 0x03, Length: -1, Handler: &PlayersUpdate{}}
+	ObjUpdateData       = PacketData{Opcode: 0x04, Length: -1, Handler: &ObjUpdate{}}
+	InventoryUpdateData = PacketData{Opcode: 0x05, Length: -1, Handler: &InventoryUpdate{}}
+	NpcUpdateData       = PacketData{Opcode: 0x06, Length: -1, Handler: &NpcUpdate{}}
+	TalkboxData         = PacketData{Opcode: 0x07, Length: -1, Handler: &Talkbox{}}
+	SkillUpdateData     = PacketData{Opcode: 0x08, Length: 7, Handler: &SkillUpdate{}}
+	NpcMovesData        = PacketData{Opcode: 0x09, Length: -1, Handler: &NpcMoves{}}
+)
+
+var Packets = map[byte]PacketData{
+	0x01: LoginAcceptedData,
+	0x02: LoginRejectedData,
+	0x03: PlayersUpdateData,
+	0x04: ObjUpdateData,
+	0x05: InventoryUpdateData,
+	0x06: NpcUpdateData,
+	0x07: TalkboxData,
+	0x08: SkillUpdateData,
+	0x09: NpcMovesData,
+}
+```
+
+### Example: Login Accepted
+
+```go network/s2c/login_accepted.go:11-16
+func (l *LoginAccepted) Handle(buf *gbuf.GBuf, g *shared.Game) {
+	g.SceneManager.SwitchTo(&game.Playground{Game: g})
+	g.ShowFailedLogin = false
+}
+```
+
+When login is accepted, the client switches from the login screen to the playground scene.
+
+### Example: Players Update
+
+```go network/s2c/players_update.go:12-57
+func (p PlayersUpdate) Handle(buf *gbuf.GBuf, game *shared.Game) {
+	playersLen, err := buf.ReadUint16()
+	if err != nil {
+		log.Printf("Failed to read players update\n")
+		return
+	}
+
+	sentNames := map[string]struct{}{}
+
+	for _ = range playersLen {
+		name, err1 := buf.ReadString()
+		x, err2 := buf.ReadUint32()
+		y, err3 := buf.ReadUint32()
+		facing, err4 := buf.ReadByte()
+
+		if err := cmp.Or(err1, err2, err3, err4); err != nil {
+			log.Printf("Failed to read player struct %v\n", err)
+			return
+		}
+
+		newX := int32(x)
+		newY := int32(y)
+
+		if name == game.Player.Name {
+			game.Player.Move(newX, newY, shared.Direction(facing))
+		} else {
+			sentNames[name] = struct{}{}
+			player, exists := game.OtherPlayers[name]
+			if exists {
+				player.Move(newX, newY, shared.Direction(facing))
+			} else {
+				game.OtherPlayers[name] = shared.NewRemotePlayer(newX, newY, shared.Direction(facing), name)
+			}
+		}
+	}
+
+	for existingName, _ := range game.OtherPlayers {
+		_, nameExists := sentNames[existingName]
+		if !nameExists {
+			delete(game.OtherPlayers, existingName)
+		}
+	}
+}
+```
+
+This packet:
+1. Updates the local player's position
+2. Updates or creates remote players
+3. Removes disconnected players (those not in the update)
+
+## Client-to-Server Packets
+
+All C2S packet handlers implement a simpler interface:
+
+```go network/c2s/packet.go:5-8
+type Packet interface {
+	Opcode() byte
+	Handle(buf *gbuf.GBuf)
+}
+```
+
+### Sending Packets
+
+Packets are sent using the `SendPacket` helper:
+
+```go shared/game.go:49-57
+func SendPacket(conn net.Conn, packet c2s.Packet) {
+	buf := gbuf.NewEmptyGBuf()
+	buf.WriteByte(packet.Opcode())
+	packet.Handle(buf)
+	_, err := conn.Write(buf.Bytes())
+	if err != nil {
+		return
+	}
+}
+```
+
+The packet's `Handle` method serializes its data into the buffer, then the entire buffer is sent over the connection.
+
+### Example: Move Packet
+
+The local player sends move packets when attempting to move:
+
+```go shared/player.go:30-53
+func (lp *LocalPlayer) SendMovePacket(game *Game, x, y int32, facing Direction) {
+	if facing > 3 {
+		return
+	}
+
+	_, exists := game.CollisionMap[util.Vector2I{X: x, Y: y}]
+	if x > int32(game.MaxX) || x < 0 || y > int32(game.MaxY) || y < 0 || exists {
+		if facing != lp.Facing {
+			SendPacket(game.Conn, &c2s.MovePacket{
+				X:      uint32(lp.X),
+				Y:      uint32(lp.Y),
+				Facing: byte(facing),
+			})
+		}
+		return
+	}
+
+	SendPacket(game.Conn, &c2s.MovePacket{
+		X:      uint32(x),
+		Y:      uint32(y),
+		Facing: byte(facing),
+	})
+}
+```
+
+This performs client-side collision detection before sending the move request to the server.
+
+### Example: Interact Packet
+
+Interacting with objects or NPCs:
+
+```go shared/player.go:56-79
+func (lp *LocalPlayer) SendInteractPacket(game *Game) {
+	facing := lp.GetFacingCoord()
+	pos := util.Vector2I{X: facing.X, Y: facing.Y}
+
+	if objId, ok := game.ObjIdByLoc[pos]; ok {
+		SendPacket(game.Conn, &c2s.InteractPacket{
+			ObjId: objId,
+			X:     uint32(facing.X),
+			Y:     uint32(facing.Y),
+		})
+		return
+	}
+
+	if npc, ok := game.TrackedNpcs[pos]; ok {
+		SendPacket(game.Conn, &c2s.TalkPacket{
+			NpcId: npc.NpcData.NpcId,
+			X:     uint32(npc.Position.X),
+			Y:     uint32(npc.Position.Y),
+		})
+		return
+	}
+
+	log.Printf("warn: interact/talk packet tried to find obj/npc that does not exist @ %d, %d\n", facing.X, facing.Y)
+}
+```
+
+The client determines whether the player is facing an object or NPC and sends the appropriate packet.
+
+## Packet Processing
+
+Packets are processed each tick in the main game loop:
+
+```go main.go:117-126
+func processPackets(packetChan <-chan network.ChanPacket, g *shared.Game) {
+	for {
+		select {
+		case packet := <-packetChan:
+			packet.PacketData.Handler.Handle(packet.Buf, g)
+		default:
+			return
+		}
+	}
+}
+```
+
+This drains the packet channel (up to 100 buffered packets) and invokes each packet's handler, which updates the game state accordingly.
+
+## Error Handling
+
+- **Unknown opcode**: Logged, packet skipped
+- **Read errors**: Connection closed, goroutine exits
+- **Channel full**: Connection closed (client can't keep up)
+- **Malformed data**: Logged in packet handler, processing continues
+
+## See Also
+
+- [Game Loop](/api/client/game-loop) - Main game loop and packet processing
+- [Rendering](/api/client/rendering) - Scene rendering system

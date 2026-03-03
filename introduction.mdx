@@ -1,0 +1,141 @@
+---
+title: Introduction to GRPG
+description: A high-performance MMO game engine built for developer experience and custom performance optimization
+---
+
+# Introduction to GRPG
+
+GRPG is a hobby MMO game engine that started as a grid networking prototype and has evolved into a comprehensive MMO framework. Built entirely in Go, GRPG embraces a philosophy of custom-tailored systems over general-purpose engines to achieve superior performance and developer experience.
+
+<Note>
+  While GRPG is still in early stages, core systems like NPCs, player persistence, inventories, and interactive objects are already implemented and production-ready.
+</Note>
+
+## Philosophy
+
+The core principle behind GRPG is that **custom, purpose-built systems deliver better performance and developer experience** than general-purpose engines. While this approach requires more upfront development, it provides:
+
+- Fine-grained control over network protocol and serialization
+- Optimized binary data formats tailored to game asset needs
+- Zero-dependency game loop with predictable tick timing
+- Direct control over client-server architecture
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Custom MMO Networking" icon="network-wired">
+    Efficient binary protocol with custom serialization using GBuf. Supports real-time multiplayer with tick-based synchronization at 60ms intervals.
+  </Card>
+  
+  <Card title="Content Scripting System" icon="code">
+    GRPGScript language for defining NPC behaviors, interactive objects, and game content. Includes LSP support and editor plugins for Zed.
+  </Card>
+  
+  <Card title="Binary Data Formats" icon="file-binary">
+    Optimized formats for textures (GRPGTEX with JPEG XL), maps (GRPGMAP), NPCs (GRPGNPC), objects (GRPGOBJ), and items (GRPGITEM).
+  </Card>
+  
+  <Card title="GUI Map Editor" icon="map">
+    Built-in map editor using giu for chunk-based world editing. Export directly to binary formats for immediate use in-game.
+  </Card>
+  
+  <Card title="Player Persistence" icon="database">
+    SQLite database with migration support for player data, inventories, skills, and XP progression. Automatic save on disconnect.
+  </Card>
+  
+  <Card title="Ebiten-Powered Client" icon="gamepad">
+    Game client built with Ebiten v2 for cross-platform rendering. Supports dynamic window resizing with aspect ratio locking.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+GRPG follows a traditional client-server MMO architecture:
+
+```
+┌─────────────┐         TCP:4422        ┌─────────────┐
+│   Client    │◄─────────────────────────►│   Server    │
+│  (Ebiten)   │   Binary Protocol (GBuf)  │   (Go)      │
+└─────────────┘                           └──────┬──────┘
+                                                  │
+                                          ┌───────▼──────┐
+                                          │   SQLite     │
+                                          │  players.db  │
+                                          └──────────────┘
+```
+
+The server runs a tick-based game loop at ~60ms intervals, processing player packets, NPC movements, and timed scripts synchronously to ensure deterministic gameplay.
+
+## Project Structure
+
+<CodeGroup>
+```bash Project Layout
+grpg/
+├── client-go/         # Game client (Ebiten)
+├── server-go/         # Game server
+├── data-go/           # Binary format readers/writers
+├── data-packer/       # CLI tool for asset conversion
+├── map-editor/        # GUI map editor (giu)
+└── grpgscript-lsp/    # Language server for GRPGScript
+```
+</CodeGroup>
+
+### Components
+
+- **client-go**: The GRPG client uses Raylib/Ebiten for rendering and connects to the server via TCP
+- **server-go**: Handles game logic, player connections, NPC AI, and world state
+- **data-go**: Contains binary format implementations (GRPGTEX, GRPGMAP, GRPGNPC, etc.)
+- **data-packer**: CLI tool using Cobra & Charm Bracelet's Fang for converting manifests to binary formats
+- **map-editor**: GUI tool for editing chunk maps and exporting to GRPG binary formats
+- **GRPGScript**: Content scripting language with tree-sitter grammar and LSP support
+
+## Why GRPG?
+
+### Performance First
+
+- **Binary Serialization**: Custom GBuf library provides efficient big-endian encoding
+- **Optimized Formats**: GRPGTEX uses JPEG XL for superior compression compared to PNG
+- **Zero-Copy Networking**: Direct buffer manipulation reduces allocations
+- **Chunk-Based Loading**: Only load and update nearby game world chunks
+
+### Developer Experience
+
+- **Type-Safe Protocols**: Defined packet structures in Go with compile-time safety
+- **Hot-Reloadable Content**: GRPGScript can be updated without server restarts
+- **Visual Tooling**: Map editor provides immediate visual feedback
+- **Database Migrations**: Automated schema versioning with golang-migrate
+
+### Production Ready
+
+- **Player Persistence**: Automatic save/load with SQLite transactions
+- **Connection Handling**: Graceful disconnect and reconnection logic
+- **Stateful Objects**: Track object states (e.g., berry bushes depleted/regrown)
+- **Skill System**: XP progression with configurable level curves
+
+## What's Implemented
+
+GRPG currently includes:
+
+- ✅ TCP-based client-server networking with custom binary protocol
+- ✅ Player authentication and session management
+- ✅ Chunk-based world loading and rendering
+- ✅ NPC spawning, wandering, and pathfinding
+- ✅ Interactive objects with state persistence
+- ✅ Inventory system (24 slots)
+- ✅ Skill system with XP tracking (Foraging, etc.)
+- ✅ Dialogue system with queued conversations
+- ✅ SQLite database with migration support
+- ✅ Map editor for chunk creation
+- ✅ Data packer CLI for asset conversion
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get GRPG running locally in under 5 minutes
+  </Card>
+  
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Deep dive into GRPG's system design and networking
+  </Card>
+</CardGroup>

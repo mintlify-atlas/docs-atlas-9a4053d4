@@ -1,0 +1,258 @@
+---
+title: 'Inventories'
+description: 'Player inventory system with 24-slot storage'
+---
+
+The inventory system provides 24-slot item storage for players with automatic stacking and persistence.
+
+## Inventory Structure
+
+```go server-go/shared/inventory.go
+type Inventory struct {
+	Items [24]InventoryItem
+}
+
+type InventoryItem struct {
+	ItemId uint16
+	Count  uint16
+	Dirty  bool
+}
+```
+
+<ParamField path="Items" type="[24]InventoryItem">
+  Fixed-size array of 24 inventory slots
+</ParamField>
+
+<ParamField path="ItemId" type="uint16">
+  The item type identifier (0 = empty slot)
+</ParamField>
+
+<ParamField path="Count" type="uint16">
+  Number of items in this stack (1-65535)
+</ParamField>
+
+<ParamField path="Dirty" type="bool">
+  Flag indicating if the slot needs to be sent to the client
+</ParamField>
+
+## Adding Items
+
+The inventory automatically handles stacking logic:
+
+```go server-go/shared/inventory.go
+func (i *Inventory) AddItem(itemId uint16) {
+	firstEmptyIdx := -1
+
+	// Try to stack with existing item
+	for idx := range 24 {
+		if i.Items[idx].ItemId == uint16(itemId) {
+			i.Items[idx].Count++
+			i.Items[idx].Dirty = true
+			return
+		}
+
+		if i.Items[idx].ItemId == 0 && firstEmptyIdx == -1 {
+			firstEmptyIdx = idx
+		}
+	}
+
+	// Create new stack in first empty slot
+	if firstEmptyIdx != -1 {
+		i.Items[firstEmptyIdx].ItemId = uint16(itemId)
+		i.Items[firstEmptyIdx].Count = 1
+		i.Items[firstEmptyIdx].Dirty = true
+	}
+}
+```
+
+### Stacking Behavior
+
+1. **Existing stack:** If the item already exists in inventory, increment its count
+2. **New stack:** If no existing stack found, place in the first empty slot
+3. **Full inventory:** If no empty slots, the item is silently dropped
+
+<Tip>
+All items of the same type stack together. There is no per-stack size limit beyond the uint16 maximum (65,535 items).
+</Tip>
+
+### Usage in Scripts
+
+Add items to player inventory through the scripting API:
+
+```go server-go/scripts/context.go
+func (o *ObjInteractCtx) PlayerInvAdd(itemId ItemConstant) {
+	o.player.Inventory.AddItem(uint16(itemId))
+	network.SendPacket(o.player.Conn, &s2c.InventoryUpdate{
+		Player: o.player,
+	}, o.game)
+}
+```
+
+Example from berry bush interaction:
+
+```go server-go/content/berry_bush.go
+scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+	if ctx.GetObjState() == 0 {
+		ctx.PlayerInvAdd(scripts.BERRIES) // Adds to inventory
+		// ...
+	}
+})
+```
+
+<Info>
+An `InventoryUpdate` packet is automatically sent to the client when items are added.
+</Info>
+
+## Persistence
+
+### Encoding to Database
+
+Inventories are serialized to binary format for database storage:
+
+```go server-go/shared/inventory.go
+func (i *Inventory) EncodeToBlob() []byte {
+	buf := gbuf.NewEmptyGBuf()
+
+	for idx := range 24 {
+		buf.WriteUint16(i.Items[idx].ItemId)
+		buf.WriteUint16(i.Items[idx].Count)
+	}
+
+	return buf.Bytes()
+}
+```
+
+Format: 96 bytes total (24 slots × 4 bytes per slot)
+```
+[Slot 0: ItemId(2) + Count(2)]
+[Slot 1: ItemId(2) + Count(2)]
+...
+[Slot 23: ItemId(2) + Count(2)]
+```
+
+### Decoding from Database
+
+```go server-go/shared/inventory.go
+func DecodeInventoryFromBlob(blob []byte) (Inventory, error) {
+	buf := gbuf.NewGBuf(blob)
+	inv := [24]InventoryItem{}
+
+	for idx := range 24 {
+		id, err1 := buf.ReadUint16()
+		count, err2 := buf.ReadUint16()
+		if err := cmp.Or(err1, err2); err != nil {
+			return Inventory{}, err
+		}
+
+		dirty := false
+		if id != 0 {
+			dirty = true
+		}
+
+		inv[idx] = InventoryItem{
+			ItemId: id,
+			Count:  count,
+			Dirty:  dirty,
+		}
+	}
+
+	return Inventory{Items: inv}, nil
+}
+```
+
+### Player Save/Load
+
+Inventories are automatically saved and loaded with player data:
+
+```go server-go/shared/player.go
+func (p *Player) LoadFromDB(db *sql.DB) error {
+	row := db.QueryRow("SELECT x, y, inventory, skills FROM players WHERE name = ?", p.Name)
+
+	var invBlob []byte
+	err := row.Scan(&loadedX, &loadedY, &invBlob, &skillsBlob)
+	// ...
+
+	inv, err := DecodeInventoryFromBlob(invBlob)
+	if err != nil {
+		return err
+	}
+
+	p.Inventory = inv
+	return nil
+}
+
+func (p *Player) SaveToDB(db *sql.DB) error {
+	// ...
+	_, err = stmt.Exec(p.Name, p.Pos.X, p.Pos.Y, p.Inventory.EncodeToBlob(), EncodeSkillsToBlob(p.Skills))
+	// ...
+}
+```
+
+<Warning>
+Inventory data is binary-encoded. Changing the serialization format will break existing player data unless you implement migration.
+</Warning>
+
+## Dirty Tracking
+
+The `Dirty` flag optimizes network synchronization:
+
+- **Set to true:** When an item is added or modified
+- **Set to true on load:** For all non-empty slots (to send initial state)
+- **Used by client:** To determine which slots need UI updates
+
+```go
+dirty := false
+if id != 0 {
+	dirty = true // Non-empty slots are dirty on load
+}
+```
+
+## Limitations
+
+<AccordionGroup>
+  <Accordion title="Fixed 24-slot capacity">
+    The inventory has a hard limit of 24 slots. This is a fixed-size array that cannot be expanded at runtime.
+  </Accordion>
+
+  <Accordion title="No item removal API">
+    Currently, the inventory system only supports adding items. Removing items must be implemented separately.
+  </Accordion>
+
+  <Accordion title="Silent overflow">
+    If the inventory is full, `AddItem()` silently does nothing. The item is lost.
+  </Accordion>
+
+  <Accordion title="No stack size limits">
+    Items can stack up to 65,535 (uint16 max). There's no per-item stack limit configuration.
+  </Accordion>
+</AccordionGroup>
+
+## Client Synchronization
+
+Inventory updates are sent to the client via the `InventoryUpdate` packet:
+
+```go
+network.SendPacket(o.player.Conn, &s2c.InventoryUpdate{
+	Player: o.player,
+}, o.game)
+```
+
+The client receives:
+- All 24 slots with their current ItemId and Count
+- Dirty flags to determine which slots changed
+- Updates the UI to reflect new inventory state
+
+<Note>
+The entire inventory is sent in each update packet, not just changed slots. The dirty flag is for client-side optimization.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Content Scripting" icon="code" href="/systems/content-scripting">
+    Learn how to give items to players through scripts
+  </Card>
+  <Card title="Skills" icon="chart-line" href="/systems/skills">
+    Explore the skill system for character progression
+  </Card>
+</CardGroup>

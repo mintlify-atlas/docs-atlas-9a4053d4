@@ -1,0 +1,220 @@
+---
+title: 'Data Packer CLI Commands'
+description: 'Command-line reference for the grpgpack data packing tool'
+---
+
+The `grpgpack` command-line tool is used to pack game data (textures, tiles, objects, items, and NPCs) into optimized binary formats for GRPG.
+
+## Installation
+
+The data packer is built from the source code in `data-packer/main.go`.
+
+## Commands
+
+### tex
+
+Packs texture files into a `.grpgtex` format.
+
+**Syntax:**
+
+```bash
+grpgpack tex [flags]
+```
+
+**Flags:**
+
+| Flag | Short | Type | Required | Default | Description |
+|------|-------|------|----------|---------|-------------|
+| `--manifest` | `-m` | string | Yes | - | Path to the texture manifest file |
+| `--output` | `-o` | string | No | `textures.grpgtex` | Output file path |
+
+**Example:**
+
+```bash
+grpgpack tex --manifest textures/manifest.cfg --output build/textures.grpgtex
+```
+
+**Manifest Format:**
+
+The texture manifest uses a `.cfg` format with `[Texture]` sections:
+
+```ini
+[Texture "grass"]
+name = grass
+id = 1
+path = assets/textures/grass.png
+```
+
+**Notes:**
+- Input images must be in PNG format
+- Textures are encoded to JPEG XL format (quality 100, effort 10)
+- ID 0 is reserved and cannot be used
+- Each texture requires a unique internal name and ID
+
+---
+
+### tile
+
+Packs tile definitions into a `.grpgtile` format.
+
+**Syntax:**
+
+```bash
+grpgpack tile [flags]
+```
+
+**Flags:**
+
+| Flag | Short | Type | Required | Default | Description |
+|------|-------|------|----------|---------|-------------|
+| `--manifest` | `-m` | string | Yes | - | Path to the tile manifest file |
+| `--output` | `-o` | string | No | `tiles.grpgtile` | Output file path |
+| `--textures` | `-t` | string | Yes | - | Path to the `.grpgtex` file to reference |
+
+**Example:**
+
+```bash
+grpgpack tile --manifest tiles/manifest.cfg --textures build/textures.grpgtex --output build/tiles.grpgtile
+```
+
+**Manifest Format:**
+
+```ini
+[Tile "grass_tile"]
+name = grass_tile
+id = 1
+tex_name = grass
+```
+
+**Notes:**
+- Requires a pre-built `.grpgtex` file
+- The `tex_name` field must match a texture name from the textures file
+- Tiles reference textures by their internal name
+
+---
+
+### obj
+
+Packs object definitions into a `.grpgobj` format.
+
+**Syntax:**
+
+```bash
+grpgpack obj [flags]
+```
+
+**Flags:**
+
+| Flag | Short | Type | Required | Default | Description |
+|------|-------|------|----------|---------|-------------|
+| `--manifest` | `-m` | string | Yes | - | Path to the object manifest file |
+| `--output` | `-o` | string | No | `objs.grpgobj` | Output file path |
+| `--textures` | `-t` | string | Yes | - | Path to the `.grpgtex` file to reference |
+
+**Example:**
+
+```bash
+grpgpack obj --manifest objects/manifest.cfg --textures build/textures.grpgtex --output build/objs.grpgobj
+```
+
+**Notes:**
+- Requires a pre-built `.grpgtex` file
+- Objects reference textures from the provided texture file
+
+---
+
+### item
+
+Packs item definitions into a `.grpgitem` format.
+
+**Syntax:**
+
+```bash
+grpgpack item [flags]
+```
+
+**Flags:**
+
+| Flag | Short | Type | Required | Default | Description |
+|------|-------|------|----------|---------|-------------|
+| `--manifest` | `-m` | string | Yes | - | Path to the item manifest file |
+| `--output` | `-o` | string | No | `items.grpgitem` | Output file path |
+| `--textures` | `-t` | string | Yes | - | Path to the `.grpgtex` file to reference |
+
+**Example:**
+
+```bash
+grpgpack item --manifest items/manifest.cfg --textures build/textures.grpgtex --output build/items.grpgitem
+```
+
+**Notes:**
+- Requires a pre-built `.grpgtex` file
+- Items reference textures from the provided texture file
+
+---
+
+### npc
+
+Packs NPC definitions into a `.grpgnpc` format.
+
+**Syntax:**
+
+```bash
+grpgpack npc [flags]
+```
+
+**Flags:**
+
+| Flag | Short | Type | Required | Default | Description |
+|------|-------|------|----------|---------|-------------|
+| `--manifest` | `-m` | string | Yes | - | Path to the NPC manifest file |
+| `--output` | `-o` | string | No | `items.grpgitem` | Output file path |
+| `--textures` | `-t` | string | Yes | - | Path to the `.grpgtex` file to reference |
+
+**Example:**
+
+```bash
+grpgpack npc --manifest npcs/manifest.cfg --textures build/textures.grpgtex --output build/npcs.grpgnpc
+```
+
+**Notes:**
+- Requires a pre-built `.grpgtex` file
+- NPCs reference textures from the provided texture file
+
+---
+
+## Build Pipeline
+
+The typical build order for game data:
+
+1. **Pack textures first** (no dependencies):
+   ```bash
+   grpgpack tex --manifest textures/manifest.cfg --output build/textures.grpgtex
+   ```
+
+2. **Pack tiles, objects, items, and NPCs** (all require textures):
+   ```bash
+   grpgpack tile --manifest tiles/manifest.cfg --textures build/textures.grpgtex --output build/tiles.grpgtile
+   grpgpack obj --manifest objects/manifest.cfg --textures build/textures.grpgtex --output build/objs.grpgobj
+   grpgpack item --manifest items/manifest.cfg --textures build/textures.grpgtex --output build/items.grpgitem
+   grpgpack npc --manifest npcs/manifest.cfg --textures build/textures.grpgtex --output build/npcs.grpgnpc
+   ```
+
+## Error Handling
+
+All commands will return an error if:
+- Required flags are missing
+- Manifest files cannot be read or parsed
+- Referenced texture files are missing or invalid
+- Output files cannot be created
+
+## Source Code
+
+Implementation: `data-packer/main.go:18-112`
+
+Command implementations:
+- Textures: `data-packer/textures/cmd.go:18-56`
+- Tiles: `data-packer/tiles/cmd.go:13-57`
+- Objects: `data-packer/objs/cmd.go:13-60`
+- Items: `data-packer/items/cmd.go:13-56`
+- NPCs: `data-packer/npcs/cmd.go:13-57`

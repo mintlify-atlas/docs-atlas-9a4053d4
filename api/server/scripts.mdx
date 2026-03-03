@@ -1,0 +1,398 @@
+---
+title: Scripting API
+description: Complete reference for GRPG server-side scripting functions
+---
+
+## Overview
+
+The Scripting API allows you to define custom behavior for objects and NPCs in GRPG. Scripts are written in Go and registered during server initialization.
+
+## Registration Functions
+
+These functions register callbacks that execute when players interact with game elements.
+
+### OnObjInteract
+
+```go
+func OnObjInteract(objId ObjConstant, fnc ObjInteractFunc)
+```
+
+Registers a callback function that runs when a player interacts with an object.
+
+<ParamField path="objId" type="ObjConstant">
+  The object ID to attach this script to (e.g., `BERRY_BUSH`)
+</ParamField>
+
+<ParamField path="fnc" type="ObjInteractFunc">
+  Callback function with signature: `func(ctx *ObjInteractCtx)`
+</ParamField>
+
+**Example:**
+
+```go
+OnObjInteract(BERRY_BUSH, func(ctx *ObjInteractCtx) {
+    if ctx.GetObjState() == 0 {
+        // Bush is empty
+        return
+    }
+    
+    // Give player berries
+    ctx.PlayerInvAdd(BERRIES)
+    ctx.PlayerAddXp(shared.Foraging, 5)
+    
+    // Set bush to empty state
+    ctx.SetObjState(0)
+    
+    // Respawn berries after 100 ticks
+    ctx.AddTimer(100, func() {
+        ctx.SetObjState(1)
+    })
+})
+```
+
+---
+
+### OnTalkNpc
+
+```go
+func OnTalkNpc(npcId NpcConstant, fnc NpcTalkFunc)
+```
+
+Registers a callback function that runs when a player talks to an NPC.
+
+<ParamField path="npcId" type="NpcConstant">
+  The NPC ID to attach this script to (e.g., `TEST`)
+</ParamField>
+
+<ParamField path="fnc" type="NpcTalkFunc">
+  Callback function with signature: `func(ctx *NpcTalkCtx)`
+</ParamField>
+
+**Example:**
+
+```go
+OnTalkNpc(TEST, func(ctx *NpcTalkCtx) {
+    ctx.TalkNpc("Hello, adventurer!")
+    ctx.TalkPlayer("Hi there!")
+    ctx.TalkNpc("Welcome to GRPG.")
+    ctx.StartDialogue()
+})
+```
+
+---
+
+### SpawnNpc
+
+```go
+func SpawnNpc(npcId NpcConstant, x uint32, y uint32, wanderRange uint8)
+```
+
+Spawns an NPC at the specified position during server initialization.
+
+<ParamField path="npcId" type="NpcConstant">
+  The NPC type to spawn (e.g., `TEST`)
+</ParamField>
+
+<ParamField path="x" type="uint32">
+  World X coordinate
+</ParamField>
+
+<ParamField path="y" type="uint32">
+  World Y coordinate
+</ParamField>
+
+<ParamField path="wanderRange" type="uint8">
+  How many tiles the NPC can wander from spawn point (0 = stationary)
+</ParamField>
+
+**Example:**
+
+```go
+// Spawn a test NPC at (100, 100) that doesn't wander
+SpawnNpc(TEST, 100, 100, 0)
+```
+
+---
+
+## ObjInteractCtx
+
+Context object passed to object interaction callbacks.
+
+### GetObjState
+
+```go
+func (o *ObjInteractCtx) GetObjState() uint8
+```
+
+Returns the current state value of the object.
+
+**Returns:** Current state (0-255)
+
+---
+
+### SetObjState
+
+```go
+func (o *ObjInteractCtx) SetObjState(new uint8)
+```
+
+Sets the object's state and automatically sends update packets to nearby players.
+
+<ParamField path="new" type="uint8">
+  New state value (0-255)
+</ParamField>
+
+**Example:**
+
+```go
+ctx.SetObjState(1)  // Set object to state 1
+```
+
+---
+
+### PlayerInvAdd
+
+```go
+func (o *ObjInteractCtx) PlayerInvAdd(itemId ItemConstant)
+```
+
+Adds an item to the player's inventory and sends an inventory update packet.
+
+<ParamField path="itemId" type="ItemConstant">
+  The item to add (e.g., `BERRIES`)
+</ParamField>
+
+**Example:**
+
+```go
+ctx.PlayerInvAdd(BERRIES)  // Give player berries
+```
+
+---
+
+### PlayerAddXp
+
+```go
+func (o *ObjInteractCtx) PlayerAddXp(skill shared.Skill, xpAmount uint32)
+```
+
+Adds experience points to a player's skill and sends a skill update packet.
+
+<ParamField path="skill" type="shared.Skill">
+  The skill to add XP to (e.g., `shared.Foraging`)
+</ParamField>
+
+<ParamField path="xpAmount" type="uint32">
+  Amount of XP to add
+</ParamField>
+
+**Example:**
+
+```go
+ctx.PlayerAddXp(shared.Foraging, 10)  // Give 10 foraging XP
+```
+
+---
+
+### AddTimer
+
+```go
+func (o *ObjInteractCtx) AddTimer(ticks uint32, fn TimerFunc)
+```
+
+Schedules a function to execute after a specified number of game ticks.
+
+<ParamField path="ticks" type="uint32">
+  Number of ticks to wait before execution (600 ticks = 1 minute at 10 TPS)
+</ParamField>
+
+<ParamField path="fn" type="TimerFunc">
+  Function to execute: `func()`
+</ParamField>
+
+**Example:**
+
+```go
+// Respawn berries after 100 ticks
+ctx.AddTimer(100, func() {
+    ctx.SetObjState(1)
+})
+```
+
+---
+
+## NpcTalkCtx
+
+Context object passed to NPC talk callbacks.
+
+### TalkNpc
+
+```go
+func (n *NpcTalkCtx) TalkNpc(msg string)
+```
+
+Adds an NPC dialogue line to the conversation queue.
+
+<ParamField path="msg" type="string">
+  The message the NPC says
+</ParamField>
+
+**Example:**
+
+```go
+ctx.TalkNpc("Welcome to my shop!")
+```
+
+---
+
+### TalkPlayer
+
+```go
+func (n *NpcTalkCtx) TalkPlayer(msg string)
+```
+
+Adds a player dialogue line to the conversation queue.
+
+<ParamField path="msg" type="string">
+  The message the player says
+</ParamField>
+
+**Example:**
+
+```go
+ctx.TalkPlayer("What do you sell?")
+```
+
+---
+
+### StartDialogue
+
+```go
+func (n *NpcTalkCtx) StartDialogue()
+```
+
+Begins the dialogue sequence, sending the first message to the player.
+
+**Must be called** after adding dialogue lines to display them.
+
+**Example:**
+
+```go
+ctx.TalkNpc("Hello!")
+ctx.TalkPlayer("Hi!")
+ctx.StartDialogue()  // Required to show the dialogue
+```
+
+---
+
+### ClearDialogueQueue
+
+```go
+func (n *NpcTalkCtx) ClearDialogueQueue()
+```
+
+Clears all dialogue and closes the dialogue box.
+
+---
+
+## Constants
+
+These type-safe constants identify game elements.
+
+### Object Constants
+
+```go
+type ObjConstant uint16
+
+const (
+    BERRY_BUSH ObjConstant = 1
+)
+```
+
+### NPC Constants
+
+```go
+type NpcConstant uint16
+
+const (
+    TEST NpcConstant = 1
+)
+```
+
+### Item Constants
+
+```go
+type ItemConstant uint16
+
+const (
+    BERRIES ItemConstant = 1
+)
+```
+
+<Note>
+  These constants are currently manually defined but will be auto-generated from `.gcfg` files in the future.
+</Note>
+
+---
+
+## Complete Example
+
+Here's a complete script that creates a harvestable berry bush:
+
+```go
+package main
+
+import (
+    "server/scripts"
+    "server/shared"
+)
+
+func init() {
+    // Register berry bush interaction
+    scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+        // Check if bush has berries (state 1)
+        if ctx.GetObjState() == 0 {
+            // Bush is empty, do nothing
+            return
+        }
+        
+        // Give player rewards
+        ctx.PlayerInvAdd(scripts.BERRIES)
+        ctx.PlayerAddXp(shared.Foraging, 5)
+        
+        // Set bush to depleted state
+        ctx.SetObjState(0)
+        
+        // Respawn berries after 100 ticks (~10 seconds at 10 TPS)
+        ctx.AddTimer(100, func() {
+            ctx.SetObjState(1)
+        })
+    })
+    
+    // Register NPC conversation
+    scripts.OnTalkNpc(scripts.TEST, func(ctx *scripts.NpcTalkCtx) {
+        ctx.TalkNpc("Hello, adventurer!")
+        ctx.TalkPlayer("What can you tell me about foraging?")
+        ctx.TalkNpc("Try interacting with berry bushes to gather berries!")
+        ctx.StartDialogue()
+    })
+    
+    // Spawn the NPC at position (100, 100)
+    scripts.SpawnNpc(scripts.TEST, 100, 100, 5)
+}
+```
+
+---
+
+## ScriptManager
+
+The `ScriptManager` is created automatically by the server and manages all registered scripts.
+
+```go
+type ScriptManager struct {
+    InteractScripts map[ObjConstant]ObjInteractFunc
+    NpcTalkScripts  map[NpcConstant]NpcTalkFunc
+}
+```
+
+You don't need to interact with this directly - use the registration functions instead.

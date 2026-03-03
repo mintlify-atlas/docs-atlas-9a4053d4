@@ -1,0 +1,504 @@
+---
+title: Client Architecture
+description: Understanding GRPG's Ebiten-based client, rendering system, and input handling
+---
+
+## Overview
+
+The GRPG client is built using [Ebiten](https://ebiten.org/), a 2D game engine for Go. It handles rendering, input processing, network communication, and maintains a local representation of the game state.
+
+## Client Structure
+
+### Game State
+
+The client maintains its own game state synchronized with the server:
+
+```go client/shared/game.go
+type Game struct {
+    ScreenWidth  int32
+    ScreenHeight int32
+    ScreenRatio  float64
+    MaxX         uint16
+    MaxY         uint16
+    CollisionMap map[util.Vector2I]struct{}
+    Objs         map[uint16]*grpgobj.Obj
+    Npcs         map[uint16]*grpgnpc.Npc
+    ObjIdByLoc   map[util.Vector2I]uint16
+    Tiles        map[uint16]*grpgtile.Tile
+    Items        map[uint16]grpgitem.Item
+    TrackedObjs  map[util.Vector2I]*GameObj
+    TrackedNpcs  map[util.Vector2I]*GameNpc
+    Skills       map[Skill]*SkillInfo
+    TileSize     int32
+    SceneManager *GSceneManager
+    Player       *LocalPlayer
+    Talkbox      Talkbox
+    OtherPlayers map[string]*RemotePlayer
+    Conn         net.Conn
+}
+```
+
+<Note>
+  The client stores asset definitions (Objs, Tiles, Items) separately from their positions (TrackedObjs, TrackedNpcs).
+</Note>
+
+### Main Loop
+
+The client implements Ebiten's `Game` interface:
+
+```go client/main.go
+type GameWrapper struct {
+    gsm     *GSceneManager
+    packets chan network.ChanPacket
+    game    *shared.Game
+}
+
+func (g *GameWrapper) Update() error {
+    // Process incoming network packets
+    processPackets(g.packets, g.game)
+    
+    // Maintain aspect ratio
+    ww, wh := ebiten.WindowSize()
+    currRatio := float64(ww) / float64(wh)
+    if currRatio > g.game.ScreenRatio {
+        ebiten.SetWindowSize(int(float64(wh) * g.game.ScreenRatio), wh)
+    }
+    
+    // Update current scene
+    return g.gsm.CurrentScene.Update()
+}
+
+func (g *GameWrapper) Draw(screen *ebiten.Image) {
+    g.gsm.CurrentScene.Draw(screen)
+}
+
+func (g *GameWrapper) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
+    return int(g.game.ScreenWidth), int(g.game.ScreenHeight)
+}
+```
+
+## Ebiten Integration
+
+### Window Configuration
+
+The client initializes Ebiten with specific window settings:
+
+```go client/main.go
+func main() {
+    ebiten.SetWindowSize(1152, 960)
+    ebiten.SetWindowTitle("GRPG Client")
+    ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+    ebiten.SetWindowSizeLimits(576, 480, 1152, 960) // Min/Max sizes
+    ebiten.SetTPS(60) // Ticks per second
+    
+    if err := ebiten.RunGame(ebGame); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+<Info>
+  The client runs at 60 TPS (ticks per second) to match the server's tick rate.
+</Info>
+
+### Scene Management
+
+The client uses a scene system to manage different game states:
+
+- **LoginScreen**: Initial login interface
+- **Playground**: Main gameplay scene
+
+```go
+type Scene interface {
+    Setup()
+    Update() error
+    Draw(screen *ebiten.Image)
+    Cleanup()
+}
+
+type GSceneManager struct {
+    CurrentScene Scene
+}
+
+func (gsm *GSceneManager) SwitchTo(scene Scene) {
+    if gsm.CurrentScene != nil {
+        gsm.CurrentScene.Cleanup()
+    }
+    gsm.CurrentScene = scene
+    gsm.CurrentScene.Setup()
+}
+```
+
+## Rendering System
+
+### World Rendering
+
+The client renders the game world tile-by-tile:
+
+```go client/game/playground.go
+func drawWorld(p *Playground, screen *ebiten.Image) {
+    player := p.Game.Player
+    mapTiles := p.Zones[util.Vector2I{X: player.ChunkX, Y: player.ChunkY}]
+    
+    // Render 16x16 chunk
+    for i := range 256 {
+        localX := int32(i % 16)
+        localY := int32(i / 16)
+        
+        dx := localX * p.Game.TileSize
+        dy := localY * p.Game.TileSize
+        
+        // Draw tile
+        texId := p.Game.Tiles[uint16(mapTiles.Tiles[i])].TexId
+        tex := p.Textures[texId]
+        util.DrawImage(screen, tex, dx, dy)
+        
+        // Calculate world position
+        worldPos := util.Vector2I{
+            X: localX + (player.ChunkX * 16),
+            Y: localY + (player.ChunkY * 16),
+        }
+        
+        // Draw object if present
+        obj := mapTiles.Objs[i]
+        if obj != 0 {
+            trackedObj, ok := p.Game.TrackedObjs[worldPos]
+            var state uint16 = 0
+            if ok {
+                state = uint16(trackedObj.State)
+            }
+            objTexId := p.Game.Objs[uint16(mapTiles.Objs[i])].Textures[state]
+            objTex := p.Textures[objTexId]
+            util.DrawImage(screen, objTex, dx, dy)
+        } else {
+            // Draw NPC if present
+            trackedNpc, ok := p.Game.TrackedNpcs[worldPos]
+            if ok {
+                npcTexId := trackedNpc.NpcData.TextureId
+                util.DrawImage(screen, p.Textures[npcTexId], dx, dy)
+            }
+        }
+    }
+}
+```
+
+<Tip>
+  Objects and NPCs occupy the same grid space but are mutually exclusive - a tile can have an object OR an NPC, not both.
+</Tip>
+
+### Player Rendering
+
+Players are rendered with animated sprites:
+
+```go client/game/playground.go
+func drawPlayer(p *Playground, screen *ebiten.Image) {
+    player := p.Game.Player
+    
+    const frameSize = 64
+    srcX := int(player.CurrFrame) * frameSize
+    sourceRec := image.Rectangle{
+        Min: image.Point{X: srcX, Y: 0},
+        Max: image.Point{X: srcX + frameSize, Y: frameSize},
+    }
+    
+    // Draw player sprite
+    sub := util.SubImage(p.PlayerTextures[player.Facing], sourceRec)
+    util.DrawImage(screen, sub, player.RealX, player.RealY)
+    
+    // Draw player name
+    p.Font16.Draw(screen, player.Name, float64(player.RealX), float64(player.RealY), color.White)
+}
+```
+
+The client maintains separate textures for each direction (UP, DOWN, LEFT, RIGHT) and animates between frames.
+
+### Camera System
+
+The camera smoothly follows the player:
+
+```go client/game/playground.go
+func updateCamera(p *Playground, crossedZone bool) {
+    player := p.Game.Player
+    
+    var cameraX = 4 * p.Game.TileSize
+    var cameraY = 4 * p.Game.TileSize
+    
+    // Keep player centered within first 12 tiles
+    if player.RealX <= 12*p.Game.TileSize {
+        cameraX = util.MinI(player.RealX-(9*p.Game.TileSize), 0)
+    }
+    if player.RealY <= 12*p.Game.TileSize {
+        cameraY = util.MinI(player.RealY-(9*p.Game.TileSize), 0)
+    }
+    
+    const speed = 16.0
+    
+    // Snap camera when crossing zones
+    if crossedZone {
+        p.CameraTarget.X = float64(cameraX)
+        p.CameraTarget.Y = float64(cameraY)
+    } else {
+        // Smooth camera movement
+        if p.CameraTarget.X < float64(cameraX) {
+            p.CameraTarget.X += speed
+        } else if p.CameraTarget.X > float64(cameraX) {
+            p.CameraTarget.X -= speed
+        }
+        if p.CameraTarget.Y < float64(cameraY) {
+            p.CameraTarget.Y += speed
+        } else if p.CameraTarget.Y > float64(cameraY) {
+            p.CameraTarget.Y -= speed
+        }
+    }
+}
+```
+
+<Note>
+  When crossing zones (16x16 chunks), the camera snaps instantly. Otherwise it smoothly interpolates.
+</Note>
+
+### UI Rendering
+
+The UI is rendered separately from the world:
+
+```go client/game/playground.go
+func drawGameFrame(p *Playground, screen *ebiten.Image) {
+    // Right panel
+    util.DrawImage(screen, p.GameframeRight, 768, 0)
+    
+    // Render inventory or skills
+    if p.Game.GameframeContainerRenderType == shared.Inventory {
+        var currItemRealPosX int32 = 768 + 64
+        var currItemRealPosY int32 = 64
+        
+        for idx, item := range p.Game.Player.Inventory {
+            if item.ItemId == 0 {
+                continue
+            }
+            data := p.Game.Items[item.ItemId]
+            tex := p.Textures[data.Texture]
+            util.DrawImage(screen, tex, currItemRealPosX, currItemRealPosY)
+            
+            // Draw item count
+            p.Font16.Draw(screen, fmt.Sprintf("%d", item.Count), 
+                float64(currItemRealPosX+16), float64(currItemRealPosY), color.White)
+            
+            currItemRealPosX += 64
+            if (idx+1)%4 == 0 {
+                currItemRealPosY += 64
+                currItemRealPosX = 768 + 64
+            }
+        }
+    }
+    
+    // Bottom panel with talkbox
+    util.DrawImage(screen, p.GameframeBottom, 0, 768)
+    if p.Game.Talkbox.Active {
+        p.Font24.Draw(screen, p.Game.Talkbox.CurrentName, 110+332, 768+28+3, color.White)
+        p.Font24.Draw(screen, p.Game.Talkbox.CurrentMessage, 90, 840, color.White)
+    }
+}
+```
+
+## Input Handling
+
+The client processes keyboard input during the update phase:
+
+```go client/game/playground.go
+func (p *Playground) Update() error {
+    player := p.Game.Player
+    
+    // Movement input
+    if inpututil.IsKeyJustPressed(ebiten.KeyW) {
+        player.SendMovePacket(p.Game, player.X, player.Y-1, shared.UP)
+    } else if inpututil.IsKeyJustPressed(ebiten.KeyS) {
+        player.SendMovePacket(p.Game, player.X, player.Y+1, shared.DOWN)
+    } else if inpututil.IsKeyJustPressed(ebiten.KeyA) {
+        player.SendMovePacket(p.Game, player.X-1, player.Y, shared.LEFT)
+    } else if inpututil.IsKeyJustPressed(ebiten.KeyD) {
+        player.SendMovePacket(p.Game, player.X+1, player.Y, shared.RIGHT)
+    }
+    
+    // Interaction input
+    if inpututil.IsKeyJustPressed(ebiten.KeyQ) {
+        player.SendInteractPacket(p.Game)
+    }
+    
+    // Dialogue continuation
+    if p.Game.Talkbox.Active && inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+        shared.SendPacket(p.Game.Conn, &c2s.Continue{})
+    }
+    
+    // Update player animation
+    player.Update(p.Game, crossedZone)
+    
+    return nil
+}
+```
+
+<Info>
+  The client uses `inpututil.IsKeyJustPressed` to detect single key presses, preventing key repeat.
+</Info>
+
+## Network Communication
+
+### Packet Processing
+
+Incoming packets are processed each frame:
+
+```go client/main.go
+func processPackets(packetChan <-chan network.ChanPacket, g *shared.Game) {
+    for {
+        select {
+        case packet := <-packetChan:
+            packet.PacketData.Handler.Handle(packet.Buf, g)
+        default:
+            return
+        }
+    }
+}
+```
+
+### Packet Reading
+
+A dedicated goroutine reads packets from the server:
+
+```go client/network/network_manager.go
+func ReadServerPackets(conn net.Conn, packetChan chan<- ChanPacket) {
+    defer conn.Close()
+    reader := bufio.NewReader(conn)
+    
+    for {
+        // Read opcode
+        opcode, err := reader.ReadByte()
+        if err != nil {
+            log.Println("error reading packet opcode, conn lost")
+            return
+        }
+        
+        packetData := s2c.Packets[opcode]
+        var bytes []byte
+        
+        // Handle variable-length packets
+        if packetData.Length == -1 {
+            lenBytes := make([]byte, 2)
+            io.ReadFull(reader, lenBytes)
+            packetLen := binary.BigEndian.Uint16(lenBytes)
+            bytes = make([]byte, packetLen)
+        } else {
+            bytes = make([]byte, packetData.Length)
+        }
+        
+        io.ReadFull(reader, bytes)
+        buf := gbuf.NewGBuf(bytes)
+        
+        // Send to packet channel
+        packetChan <- ChanPacket{
+            Buf:        buf,
+            PacketData: packetData,
+        }
+    }
+}
+```
+
+### Sending Packets
+
+```go client/shared/game.go
+func SendPacket(conn net.Conn, packet c2s.Packet) {
+    buf := gbuf.NewEmptyGBuf()
+    buf.WriteByte(packet.Opcode())
+    packet.Handle(buf)
+    conn.Write(buf.Bytes())
+}
+```
+
+## Asset Loading
+
+The client loads all game assets during initialization:
+
+```go client/game/playground.go
+func (p *Playground) Setup() {
+    var assetsDirectory = "../../grpg-assets/"
+    
+    // Load textures from binary format
+    p.Textures = loadTextures(assetsDirectory + "assets/textures.grpgtex")
+    
+    // Load game data
+    p.Game.Objs = loadObjs(assetsDirectory + "assets/objs.grpgobj")
+    p.Game.Tiles = loadTiles(assetsDirectory + "assets/tiles.grpgtile")
+    p.Game.Items = loadItems(assetsDirectory + "assets/items.grpgitem")
+    p.Game.Npcs = loadNpcs(assetsDirectory + "assets/npcs.grpgnpc")
+    
+    // Load map zones
+    p.Zones = loadMaps(assetsDirectory+"maps/", p.Game)
+    
+    // Load UI assets
+    otherTex := loadTex(assetsDirectory + "assets/other.grpgtex")
+    p.GameframeRight = otherTex["gameframe_right"]
+    p.PlayerTextures[shared.UP] = otherTex["player_up"]
+    // ...
+}
+```
+
+<Warning>
+  All assets must be loaded before the game loop starts. Missing assets will cause the client to crash.
+</Warning>
+
+## Player Animation
+
+Players animate while moving:
+
+```go
+type LocalPlayer struct {
+    X, Y          uint32  // Grid position
+    RealX, RealY  int32   // Pixel position
+    Facing        Direction
+    CurrFrame     uint8   // Animation frame (0-3)
+    FrameCounter  uint8   // Frames until next animation
+}
+
+func (p *LocalPlayer) Update(game *Game, crossedZone bool) {
+    // Interpolate pixel position toward grid position
+    targetX := int32(p.X * 64)
+    targetY := int32(p.Y * 64)
+    
+    if p.RealX < targetX { p.RealX += 8 }
+    if p.RealX > targetX { p.RealX -= 8 }
+    if p.RealY < targetY { p.RealY += 8 }
+    if p.RealY > targetY { p.RealY -= 8 }
+    
+    // Update animation frame
+    p.FrameCounter++
+    if p.FrameCounter >= 8 {
+        p.CurrFrame = (p.CurrFrame + 1) % 4
+        p.FrameCounter = 0
+    }
+}
+```
+
+## Performance Considerations
+
+### Rendering Optimization
+
+- **World Image**: The world is rendered to an intermediate `*ebiten.Image` before being drawn to screen
+- **Chunk-based**: Only the current 16x16 chunk is rendered
+- **Texture Caching**: All textures are loaded once and cached in memory
+
+### Network Optimization
+
+- **Buffered Channel**: Packet channel has a capacity of 100 to handle bursts
+- **Batch Processing**: All pending packets are processed in a single frame
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Server" icon="server" href="/components/server">
+    Learn about the server architecture
+  </Card>
+  <Card title="Networking" icon="network-wired" href="/components/networking">
+    Understand the packet system
+  </Card>
+  <Card title="Data Formats" icon="database" href="/components/data-formats">
+    Learn about asset file formats
+  </Card>
+</CardGroup>

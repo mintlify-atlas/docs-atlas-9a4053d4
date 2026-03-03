@@ -1,0 +1,494 @@
+---
+title: "GBuf"
+description: "Binary buffer utility for reading and writing GRPG data formats"
+---
+
+## Overview
+
+GBuf is a binary buffer utility that provides methods for reading and writing primitive data types in big-endian byte order. It serves as the foundation for all GRPG binary data formats, handling serialization and deserialization of integers, strings, booleans, and byte arrays.
+
+## Type Definition
+
+```go
+type GBuf struct {
+    slice []byte
+    pos   int
+}
+```
+
+<ParamField path="slice" type="[]byte">
+  The underlying byte slice containing the buffer data
+</ParamField>
+
+<ParamField path="pos" type="int">
+  Current read position in the buffer (for read operations)
+</ParamField>
+
+## Constructor Functions
+
+### NewGBuf
+
+```go
+func NewGBuf(data []byte) *GBuf
+```
+
+Creates a new GBuf from existing byte data for reading.
+
+<ParamField path="data" type="[]byte" required>
+  Existing byte slice to wrap in a GBuf
+</ParamField>
+
+**Returns:** `*GBuf` - A new GBuf instance positioned at the start of the data
+
+**Example:**
+```go
+data := []byte{0x00, 0x02}
+buf := gbuf.NewGBuf(data)
+val, err := buf.ReadUint16() // val = 2
+```
+
+### NewEmptyGBuf
+
+```go
+func NewEmptyGBuf() *GBuf
+```
+
+Creates a new empty GBuf for writing operations.
+
+**Returns:** `*GBuf` - A new GBuf instance with an empty slice (initial capacity of 128 bytes)
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteUint16(42)
+bytes := buf.Bytes() // []byte{0x00, 0x2A}
+```
+
+## Read Methods
+
+All read methods advance the internal position pointer and return an error if insufficient data is available.
+
+### ReadUint16
+
+```go
+func (buf *GBuf) ReadUint16() (uint16, error)
+```
+
+Reads a 16-bit unsigned integer in big-endian byte order.
+
+**Returns:** 
+- `uint16` - The value read from the buffer
+- `error` - Error if fewer than 2 bytes are available
+
+**Example:**
+```go
+data := []byte{0x00, 0x02}
+buf := gbuf.NewGBuf(data)
+val, err := buf.ReadUint16() // val = 2, err = nil
+```
+
+### ReadUint32
+
+```go
+func (buf *GBuf) ReadUint32() (uint32, error)
+```
+
+Reads a 32-bit unsigned integer in big-endian byte order.
+
+**Returns:**
+- `uint32` - The value read from the buffer
+- `error` - Error if fewer than 4 bytes are available
+
+**Example:**
+```go
+data := []byte{0x00, 0x00, 0x00, 0x04}
+buf := gbuf.NewGBuf(data)
+val, err := buf.ReadUint32() // val = 4, err = nil
+```
+
+### ReadInt32
+
+```go
+func (buf *GBuf) ReadInt32() (int32, error)
+```
+
+Reads a 32-bit signed integer in big-endian byte order.
+
+**Returns:**
+- `int32` - The value read from the buffer
+- `error` - Error if fewer than 4 bytes are available
+
+**Example:**
+```go
+data := []byte{0xFF, 0xFF, 0xFF, 0xF4} // -12
+buf := gbuf.NewGBuf(data)
+val, err := buf.ReadInt32() // val = -12, err = nil
+```
+
+### ReadByte
+
+```go
+func (buf *GBuf) ReadByte() (byte, error)
+```
+
+Reads a single byte from the buffer.
+
+**Returns:**
+- `byte` - The byte value read
+- `error` - Error if no bytes are available
+
+**Example:**
+```go
+data := []byte{0xFF, 0x01}
+buf := gbuf.NewGBuf(data)
+first, _ := buf.ReadByte()  // 0xFF
+second, _ := buf.ReadByte() // 0x01
+```
+
+### ReadBool
+
+```go
+func (buf *GBuf) ReadBool() (bool, error)
+```
+
+Reads a boolean value encoded as a byte (1 = true, 0 = false).
+
+**Returns:**
+- `bool` - The boolean value (true if byte is 1, false otherwise)
+- `error` - Error if no bytes are available
+
+**Example:**
+```go
+data := []byte{0x01, 0x00}
+buf := gbuf.NewGBuf(data)
+val1, _ := buf.ReadBool() // true
+val2, _ := buf.ReadBool() // false
+```
+
+### ReadBytes
+
+```go
+func (buf *GBuf) ReadBytes(length int) ([]byte, error)
+```
+
+Reads a specified number of bytes from the buffer.
+
+<ParamField path="length" type="int" required>
+  Number of bytes to read
+</ParamField>
+
+**Returns:**
+- `[]byte` - Slice containing the bytes read
+- `error` - Error if fewer than `length` bytes are available
+
+**Example:**
+```go
+data := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+buf := gbuf.NewGBuf(data)
+val, _ := buf.ReadBytes(3) // []byte{0x01, 0x02, 0x03}
+```
+
+### ReadString
+
+```go
+func (buf *GBuf) ReadString() (string, error)
+```
+
+Reads a length-prefixed string. The string format is a uint32 length followed by that many UTF-8 bytes.
+
+**Returns:**
+- `string` - The decoded string
+- `error` - Error if the length prefix or string bytes cannot be read
+
+**Binary Format:**
+```
+[4 bytes: uint32 length][length bytes: UTF-8 string data]
+```
+
+**Example:**
+```go
+// Data: length=5, then "hello"
+data := []byte{0x00, 0x00, 0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}
+buf := gbuf.NewGBuf(data)
+val, _ := buf.ReadString() // "hello"
+```
+
+## Write Methods
+
+All write methods append data to the buffer and do not return errors.
+
+### WriteUint16
+
+```go
+func (buf *GBuf) WriteUint16(val uint16)
+```
+
+Writes a 16-bit unsigned integer in big-endian byte order.
+
+<ParamField path="val" type="uint16" required>
+  The value to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteUint16(0x1234)
+// Buffer contains: []byte{0x12, 0x34}
+```
+
+### WriteUint32
+
+```go
+func (buf *GBuf) WriteUint32(val uint32)
+```
+
+Writes a 32-bit unsigned integer in big-endian byte order.
+
+<ParamField path="val" type="uint32" required>
+  The value to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteUint32(0x12345678)
+// Buffer contains: []byte{0x12, 0x34, 0x56, 0x78}
+```
+
+### WriteInt32
+
+```go
+func (buf *GBuf) WriteInt32(val int32)
+```
+
+Writes a 32-bit signed integer in big-endian byte order.
+
+<ParamField path="val" type="int32" required>
+  The value to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteInt32(-12)
+// Buffer contains: []byte{0xFF, 0xFF, 0xFF, 0xF4}
+```
+
+### WriteByte
+
+```go
+func (buf *GBuf) WriteByte(val byte)
+```
+
+Writes a single byte to the buffer.
+
+<ParamField path="val" type="byte" required>
+  The byte value to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteByte(0xFF)
+buf.WriteByte(0x01)
+// Buffer contains: []byte{0xFF, 0x01}
+```
+
+### WriteBool
+
+```go
+func (buf *GBuf) WriteBool(val bool)
+```
+
+Writes a boolean value as a byte (true = 1, false = 0).
+
+<ParamField path="val" type="bool" required>
+  The boolean value to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteBool(true)
+buf.WriteBool(false)
+// Buffer contains: []byte{0x01, 0x00}
+```
+
+### WriteBytes
+
+```go
+func (buf *GBuf) WriteBytes(bytes []byte)
+```
+
+Writes a byte slice to the buffer.
+
+<ParamField path="bytes" type="[]byte" required>
+  The bytes to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteBytes([]byte{0x01, 0x02, 0x03})
+// Buffer contains: []byte{0x01, 0x02, 0x03}
+```
+
+### WriteBytesV
+
+```go
+func (buf *GBuf) WriteBytesV(bytes ...byte)
+```
+
+Writes variadic bytes to the buffer.
+
+<ParamField path="bytes" type="...byte" required>
+  Variable number of byte values to write
+</ParamField>
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteBytesV(0x01, 0x02)
+buf.WriteBytesV(0x03, 0x04, 0x05)
+// Buffer contains: []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+```
+
+### WriteString
+
+```go
+func (buf *GBuf) WriteString(val string)
+```
+
+Writes a length-prefixed string. Encodes the string as a uint32 length followed by UTF-8 bytes.
+
+<ParamField path="val" type="string" required>
+  The string to write
+</ParamField>
+
+**Binary Format:**
+```
+[4 bytes: uint32 length][length bytes: UTF-8 string data]
+```
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteString("hello")
+// Buffer contains: []byte{0x00, 0x00, 0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}
+```
+
+## Utility Methods
+
+### Clear
+
+```go
+func (buf *GBuf) Clear()
+```
+
+Replaces the backing slice with a new empty slice and resets the position to 0.
+
+**Example:**
+```go
+buf := gbuf.NewGBuf([]byte{0x01, 0x02, 0x03, 0x04})
+buf.Clear()
+buf.WriteUint16(0x1234)
+// Buffer now contains: []byte{0x12, 0x34}
+```
+
+### Bytes
+
+```go
+func (buf *GBuf) Bytes() []byte
+```
+
+Returns the underlying byte slice.
+
+**Returns:** `[]byte` - The complete buffer contents
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+buf.WriteUint32(2)
+bytes := buf.Bytes() // []byte{0x00, 0x00, 0x00, 0x02}
+```
+
+## Binary Format Details
+
+### Byte Order
+
+All multi-byte integers use **big-endian** (network) byte order:
+- Most significant byte first
+- Example: `0x1234` is stored as `[0x12, 0x34]`
+
+### String Encoding
+
+Strings use a length-prefix format:
+1. **Length:** 4-byte uint32 indicating the number of UTF-8 bytes
+2. **Data:** The UTF-8 encoded string bytes
+
+Empty strings are encoded as `[0x00, 0x00, 0x00, 0x00]` (zero length, no data).
+
+### Boolean Encoding
+
+Booleans are stored as a single byte:
+- `0x01` = true
+- `0x00` = false
+
+## Usage Patterns
+
+### Reading Data
+
+```go
+// Load binary data
+fileData, _ := os.ReadFile("data.bin")
+buf := gbuf.NewGBuf(fileData)
+
+// Read header
+magic, _ := buf.ReadBytes(8)
+version, _ := buf.ReadUint16()
+
+// Read array
+count, _ := buf.ReadUint32()
+items := make([]string, count)
+for i := range count {
+    items[i], _ = buf.ReadString()
+}
+```
+
+### Writing Data
+
+```go
+// Create buffer
+buf := gbuf.NewEmptyGBuf()
+
+// Write header
+buf.WriteBytes([]byte("GRPGDATA"))
+buf.WriteUint16(1) // version
+
+// Write array
+items := []string{"grass", "stone", "water"}
+buf.WriteUint32(uint32(len(items)))
+for _, item := range items {
+    buf.WriteString(item)
+}
+
+// Save to file
+os.WriteFile("data.bin", buf.Bytes(), 0644)
+```
+
+## Error Handling
+
+Read methods return errors when:
+- **Insufficient data:** Attempting to read more bytes than available
+- **Example:** Reading a uint16 when only 1 byte remains
+
+Write methods do not return errors and will automatically grow the buffer as needed.
+
+```go
+data := []byte{0x00} // Only 1 byte
+buf := gbuf.NewGBuf(data)
+val, err := buf.ReadUint16()
+if err != nil {
+    // err: "not enough bytes to read uint16"
+}
+```

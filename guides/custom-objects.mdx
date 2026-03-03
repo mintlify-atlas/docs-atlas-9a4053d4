@@ -1,0 +1,351 @@
+---
+title: Creating Custom Objects
+description: Build custom interactive objects with textures, states, and behaviors
+---
+
+This tutorial walks through creating a complete custom object in GRPG, from defining the manifest to implementing interactive behavior.
+
+## What You'll Build
+
+In this guide, we'll create a **Water Well** object that:
+- Has two visual states (full and empty)
+- Players can interact with to collect water
+- Refills automatically after a timer
+- Gives players a water bucket item
+
+## Prerequisites
+
+Before starting, ensure you have:
+- Texture files prepared (PNG format)
+- The `data-packer` CLI tool built
+- Basic understanding of GCFG manifest format
+
+## Step 1: Create Object Textures
+
+<Steps>
+  <Step title="Prepare Texture Files">
+    Create two PNG texture files for your object states:
+    
+    - `water_well_full.png` - Shows a well with water
+    - `water_well_empty.png` - Shows an empty well
+    
+    Place these in your textures directory (e.g., `assets/textures/`).
+  </Step>
+
+  <Step title="Create Texture Manifest">
+    Create or update your texture manifest file (`textures.gcfg`):
+
+    ```gcfg textures.gcfg
+    [Texture] {
+        name = "water_well_full"
+        id = 100
+        path = "assets/textures/water_well_full.png"
+    }
+
+    [Texture] {
+        name = "water_well_empty"
+        id = 101
+        path = "assets/textures/water_well_empty.png"
+    }
+    ```
+
+    <Note>
+      Texture IDs must be unique across your entire game. ID 0 is reserved.
+    </Note>
+  </Step>
+
+  <Step title="Pack Textures">
+    Run the data packer to convert textures to GRPGTEX format:
+
+    ```bash
+    ./grpgpack tex -m textures.gcfg -o textures.grpgtex
+    ```
+
+    This creates a binary file with all textures encoded as JPEG XL for optimal compression.
+  </Step>
+</Steps>
+
+## Step 2: Define the Object
+
+<Steps>
+  <Step title="Create Object Manifest">
+    Create or update your object manifest file (`objects.gcfg`):
+
+    ```gcfg objects.gcfg
+    [Obj] {
+        name = "water_well"
+        id = 50
+        flags = ["STATE", "INTERACT"]
+        textures = ["water_well_full", "water_well_empty"]
+        interact_text = "Draw Water"
+    }
+    ```
+
+    **Field explanations:**
+    
+    | Field | Description |
+    |-------|-------------|
+    | `name` | Internal identifier for the object |
+    | `id` | Unique numeric ID (must match your script constants) |
+    | `flags` | Object capabilities - `STATE` for multiple states, `INTERACT` for player interaction |
+    | `textures` | Array of texture names - index corresponds to state number |
+    | `interact_text` | Text shown to player when near the object |
+  </Step>
+
+  <Step title="Understanding Flags">
+    Available object flags:
+
+    - **`STATE`** - Object has multiple visual states (requires multiple textures)
+    - **`INTERACT`** - Players can interact with the object (requires `interact_text`)
+
+    Examples:
+    ```gcfg
+    # Static decoration (no flags)
+    flags = []
+    
+    # Interactive but no state change (e.g., sign)
+    flags = ["INTERACT"]
+    
+    # Stateful but not interactive (e.g., decoration that changes over time)
+    flags = ["STATE"]
+    
+    # Stateful and interactive (e.g., resource node)
+    flags = ["STATE", "INTERACT"]
+    ```
+  </Step>
+
+  <Step title="Pack Objects">
+    Run the data packer to create the binary object file:
+
+    ```bash
+    ./grpgpack obj -m objects.gcfg -t textures.grpgtex -o objects.grpgobj
+    ```
+
+    The `-t` flag provides the texture file so the packer can validate texture references.
+  </Step>
+</Steps>
+
+## Step 3: Implement Behavior
+
+<Steps>
+  <Step title="Add Object Constant">
+    Edit `server-go/scripts/constants.go` to add your object:
+
+    ```go server-go/scripts/constants.go
+    type ObjConstant uint16
+    type ItemConstant uint16
+
+    const (
+        _ ObjConstant = iota
+        BERRY_BUSH
+        WATER_WELL  // Add your object here
+    )
+
+    const (
+        _ ItemConstant = iota
+        BERRIES
+        WATER_BUCKET  // Add your item here
+    )
+    ```
+
+    <Warning>
+      The constant value must match the `id` in your manifest. Using iota, `WATER_WELL` would be 2. Adjust your manifest ID accordingly or use explicit values.
+    </Warning>
+  </Step>
+
+  <Step title="Create Behavior Script">
+    Create `server-go/content/water_well.go`:
+
+    ```go server-go/content/water_well.go
+    package content
+
+    import (
+        "server/scripts"
+        "server/shared"
+    )
+
+    func init() {
+        scripts.OnObjInteract(scripts.WATER_WELL, func(ctx *scripts.ObjInteractCtx) {
+            currentState := ctx.GetObjState()
+            
+            // State 0 = Full (water_well_full texture)
+            // State 1 = Empty (water_well_empty texture)
+            
+            if currentState == 0 {
+                // Well is full, allow drawing water
+                ctx.SetObjState(1)  // Change to empty state
+                ctx.PlayerInvAdd(scripts.WATER_BUCKET)
+                ctx.PlayerAddXp(shared.Gathering, 50)
+                
+                // Refill after 150 ticks (~15 seconds if 10 ticks/sec)
+                ctx.AddTimer(150, func() {
+                    ctx.SetObjState(0)  // Reset to full
+                })
+            }
+            // If currentState == 1 (empty), do nothing - well is depleted
+        })
+    }
+    ```
+  </Step>
+
+  <Step title="Understanding State Management">
+    The texture array index corresponds to state numbers:
+
+    ```go
+    textures = ["water_well_full", "water_well_empty"]
+    //          State 0            State 1
+    ```
+
+    When you call `ctx.SetObjState(1)`, the client automatically renders the texture at index 1 (`water_well_empty`).
+  </Step>
+</Steps>
+
+## Step 4: Place on Map
+
+Now that your object is defined and has behavior, place it on the map:
+
+<Steps>
+  <Step title="Load in Map Editor">
+    1. Open the GRPG Map Editor
+    2. Click **Load Objs** and select `objects.grpgobj`
+    3. Click **Load Textures** and select `textures.grpgtex`
+  </Step>
+
+  <Step title="Place Object">
+    1. Switch to the **Objs** tab in the selector panel
+    2. Click on your water well object
+    3. Click on the grid to place instances
+    4. Set the chunk coordinates (X/Y)
+    5. Click **Save Map** to export as `.grpgmap`
+  </Step>
+</Steps>
+
+## Advanced Example: Multi-State Mining Rock
+
+Here's a more complex example with three states:
+
+```gcfg objects.gcfg
+[Obj] {
+    name = "iron_rock"
+    id = 51
+    flags = ["STATE", "INTERACT"]
+    textures = ["iron_rock_full", "iron_rock_partial", "iron_rock_depleted"]
+    interact_text = "Mine Rock"
+}
+```
+
+```go server-go/content/iron_rock.go
+package content
+
+import (
+    "server/scripts"
+    "server/shared"
+)
+
+func init() {
+    scripts.OnObjInteract(scripts.IRON_ROCK, func(ctx *scripts.ObjInteractCtx) {
+        state := ctx.GetObjState()
+        
+        switch state {
+        case 0: // Full rock
+            ctx.SetObjState(1)
+            ctx.PlayerInvAdd(scripts.IRON_ORE)
+            ctx.PlayerAddXp(shared.Mining, 100)
+            
+        case 1: // Partially mined
+            ctx.SetObjState(2)
+            ctx.PlayerInvAdd(scripts.IRON_ORE)
+            ctx.PlayerAddXp(shared.Mining, 100)
+            
+            // Respawn after 5 minutes (3000 ticks at 10 ticks/sec)
+            ctx.AddTimer(3000, func() {
+                ctx.SetObjState(0)
+            })
+            
+        case 2: // Depleted - do nothing
+            // Could show a message or prevent interaction
+        }
+    })
+}
+```
+
+## Object Flags Reference
+
+From `data-go/grpgobj/grpgobj.go:17`:
+
+```go
+type ObjFlag byte
+
+const (
+    STATE    ObjFlag = 1 << iota  // Bit 0 - Object has multiple states
+    INTERACT                       // Bit 1 - Object can be interacted with
+)
+```
+
+Flags are stored as a bitmask, allowing efficient combination and checking.
+
+## Manifest Format Details
+
+GRPG uses the [GCFG](https://github.com/grian32/gcfg) format for manifests. Key features:
+
+- Section-based structure with `[SectionName]`
+- Array support with `[]`
+- String, integer, and boolean types
+- Comments with `#`
+
+Example with all features:
+
+```gcfg
+# This is a comment
+[Obj] {
+    name = "example_obj"        # String
+    id = 42                      # Integer
+    flags = ["STATE"]            # Array of strings
+    textures = ["tex1", "tex2"]  # Multiple array elements
+    interact_text = ""           # Empty string
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Object doesn't appear in map editor">
+    - Ensure you clicked **Load Objs** and selected the correct `.grpgobj` file
+    - Verify the manifest packed successfully without errors
+    - Check that texture references in the manifest exist in your texture file
+  </Accordion>
+
+  <Accordion title="Object has wrong texture">
+    - Verify texture names in manifest match exactly (case-sensitive)
+    - Ensure textures were packed before objects (objects reference texture IDs)
+    - Check state numbers match texture array indices
+  </Accordion>
+
+  <Accordion title="Interaction doesn't work">
+    - Confirm object has `INTERACT` flag in manifest
+    - Verify object constant ID matches manifest ID
+    - Check that content file is in `server-go/content/` directory (automatically imported)
+    - Ensure server was rebuilt after adding the script
+  </Accordion>
+
+  <Accordion title="Error: 'interact_text without interact flag not allowed'">
+    Add the `INTERACT` flag to your object:
+    
+    ```gcfg
+    flags = ["STATE", "INTERACT"]
+    ```
+    
+    The packer validates that `interact_text` is only set when `INTERACT` flag is present.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Map Creation" icon="map" href="/guides/map-creation">
+    Learn how to place objects using the map editor
+  </Card>
+  <Card title="Asset Pipeline" icon="diagram-project" href="/guides/asset-pipeline">
+    Understand the complete asset workflow
+  </Card>
+</CardGroup>

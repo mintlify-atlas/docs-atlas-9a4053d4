@@ -1,0 +1,486 @@
+---
+title: "GRPGOBJ Format"
+description: "Object definition binary format for GRPG interactive game objects"
+---
+
+## Overview
+
+GRPGOBJ is the binary format for defining interactive objects in GRPG. Objects can be stateful (multiple visual states), interactable (player can interact), or both. Examples include trees, rocks, harvestable bushes, doors, and chests.
+
+## Binary Format Structure
+
+```
+[8 bytes: Magic Header "GRPGOBJ\0"]
+[2 bytes: Object Count (uint16)]
+[Object Array:]
+  For each object:
+    [4 bytes: Name Length (uint32)]
+    [N bytes: Name (UTF-8 string)]
+    [2 bytes: Object ID (uint16)]
+    [1 byte: Flags (ObjFlags)]
+    [If STATE flag not set:]
+      [2 bytes: Texture ID (uint16)]
+    [If STATE flag is set:]
+      [2 bytes: Texture Count (uint16)]
+      [For each texture:]
+        [2 bytes: Texture ID (uint16)]
+    [If INTERACT flag is set:]
+      [4 bytes: Interact Text Length (uint32)]
+      [M bytes: Interact Text (UTF-8 string)]
+```
+
+## Type Definitions
+
+### Header
+
+```go
+type Header struct {
+    Magic [8]byte
+}
+```
+
+<ParamField path="Magic" type="[8]byte">
+  Magic number identifier: `"GRPGOBJ\0"` (GRPGOBJ followed by null byte)
+</ParamField>
+
+### ObjFlag
+
+```go
+type ObjFlag byte
+
+const (
+    STATE    ObjFlag = 1 << iota // bit 0: Object has multiple states
+    INTERACT                     // bit 1: Object is interactable
+)
+```
+
+<ParamField path="STATE" type="ObjFlag">
+  Bit 0: Object has multiple visual states (e.g., berry bush with/without berries)
+</ParamField>
+
+<ParamField path="INTERACT" type="ObjFlag">
+  Bit 1: Object can be interacted with by the player
+</ParamField>
+
+### ObjFlags
+
+```go
+type ObjFlags byte
+```
+
+Bitfield combining multiple `ObjFlag` values.
+
+### Obj
+
+```go
+type Obj struct {
+    Name         string
+    ObjId        uint16
+    Flags        ObjFlags
+    Textures     []uint16 // Size 1 if non-stateful, N if stateful
+    InteractText string   // Only filled if INTERACT flag is set
+}
+```
+
+<ParamField path="Name" type="string">
+  Human-readable name of the object (e.g., "stone", "berry_bush", "oak_tree")
+</ParamField>
+
+<ParamField path="ObjId" type="uint16">
+  Unique identifier for this object type (0-65535)
+</ParamField>
+
+<ParamField path="Flags" type="ObjFlags">
+  Bitfield indicating object properties (STATE and/or INTERACT)
+</ParamField>
+
+<ParamField path="Textures" type="[]uint16">
+  Array of texture IDs from GRPGTEX. For stateful objects, index represents state number (state 0 = Textures[0], state 1 = Textures[1], etc.)
+</ParamField>
+
+<ParamField path="InteractText" type="string">
+  Text displayed when player can interact (e.g., "Harvest", "Open", "Talk"). Empty if INTERACT flag is not set.
+</ParamField>
+
+### Methods
+
+#### Equal
+
+```go
+func (o *Obj) Equal(other Obj) bool
+```
+
+Compares two objects for equality. Used primarily for testing.
+
+<ParamField path="other" type="Obj" required>
+  The object to compare against
+</ParamField>
+
+**Returns:** `bool` - True if all fields match (name, ID, flags, textures)
+
+## Functions
+
+### WriteHeader
+
+```go
+func WriteHeader(buf *gbuf.GBuf)
+```
+
+Writes the GRPGOBJ magic header to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write the header to
+</ParamField>
+
+**Binary Output:**
+```
+[0x47, 0x52, 0x50, 0x47, 0x4F, 0x42, 0x4A, 0x00]
+"G    R    P    G    O    B    J    \0"
+```
+
+**Example:**
+```go
+buf := gbuf.NewEmptyGBuf()
+grpgobj.WriteHeader(buf)
+```
+
+### ReadHeader
+
+```go
+func ReadHeader(buf *gbuf.GBuf) (Header, error)
+```
+
+Reads and validates the GRPGOBJ header from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read the header from
+</ParamField>
+
+**Returns:**
+- `Header` - The parsed header structure
+- `error` - Error if insufficient data is available
+
+**Example:**
+```go
+data, _ := os.ReadFile("objects.grpgobj")
+buf := gbuf.NewGBuf(data)
+header, err := grpgobj.ReadHeader(buf)
+```
+
+### WriteObjs
+
+```go
+func WriteObjs(buf *gbuf.GBuf, objs []Obj)
+```
+
+Writes an array of object definitions to the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to write objects to
+</ParamField>
+
+<ParamField path="objs" type="[]Obj" required>
+  Array of object definitions to serialize
+</ParamField>
+
+**Binary Output Format:**
+```
+[2 bytes: uint16 count]
+For each object:
+  [4 bytes: uint32 name length]
+  [N bytes: UTF-8 name]
+  [2 bytes: uint16 object ID]
+  [1 byte: flags]
+  [If STATE not set: 2 bytes texture ID]
+  [If STATE set: 2 bytes texture count, then texture IDs]
+  [If INTERACT set: 4 bytes text length, then UTF-8 text]
+```
+
+**Example:**
+```go
+objs := []grpgobj.Obj{
+    {
+        Name:     "stone",
+        ObjId:    2,
+        Flags:    0, // No flags
+        Textures: []uint16{1},
+    },
+    {
+        Name:         "berry_bush",
+        ObjId:        4,
+        Flags:        grpgobj.ObjFlags(grpgobj.STATE | grpgobj.INTERACT),
+        Textures:     []uint16{2, 3}, // State 0: with berries, State 1: without
+        InteractText: "Harvest",
+    },
+}
+
+buf := gbuf.NewEmptyGBuf()
+grpgobj.WriteHeader(buf)
+grpgobj.WriteObjs(buf, objs)
+
+os.WriteFile("objects.grpgobj", buf.Bytes(), 0644)
+```
+
+### ReadObjs
+
+```go
+func ReadObjs(buf *gbuf.GBuf) ([]Obj, error)
+```
+
+Reads an array of object definitions from the buffer.
+
+<ParamField path="buf" type="*gbuf.GBuf" required>
+  The buffer to read objects from (positioned after the header)
+</ParamField>
+
+**Returns:**
+- `[]Obj` - Array of parsed object definitions
+- `error` - Error if data is malformed or incomplete
+
+**Example:**
+```go
+data, _ := os.ReadFile("objects.grpgobj")
+buf := gbuf.NewGBuf(data)
+
+header, _ := grpgobj.ReadHeader(buf)
+objs, err := grpgobj.ReadObjs(buf)
+if err != nil {
+    log.Fatal("Failed to read objects")
+}
+
+for _, obj := range objs {
+    fmt.Printf("Object: %s (ID: %d)\n", obj.Name, obj.ObjId)
+    if grpgobj.IsFlagSet(obj.Flags, grpgobj.INTERACT) {
+        fmt.Printf("  Interact: %s\n", obj.InteractText)
+    }
+}
+```
+
+### IsFlagSet
+
+```go
+func IsFlagSet(flags ObjFlags, flag ObjFlag) bool
+```
+
+Checks if a specific flag is set in an ObjFlags bitfield.
+
+<ParamField path="flags" type="ObjFlags" required>
+  The flags bitfield to check
+</ParamField>
+
+<ParamField path="flag" type="ObjFlag" required>
+  The specific flag to test for (STATE or INTERACT)
+</ParamField>
+
+**Returns:** `bool` - True if the flag is set
+
+**Example:**
+```go
+obj := grpgobj.Obj{
+    Flags: grpgobj.ObjFlags(grpgobj.STATE | grpgobj.INTERACT),
+}
+
+if grpgobj.IsFlagSet(obj.Flags, grpgobj.STATE) {
+    fmt.Println("Object has multiple states")
+}
+
+if grpgobj.IsFlagSet(obj.Flags, grpgobj.INTERACT) {
+    fmt.Println("Object is interactable")
+}
+```
+
+## Complete Usage Example
+
+### Creating Object Definitions
+
+```go
+package main
+
+import (
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgobj"
+    "os"
+)
+
+func main() {
+    objs := []grpgobj.Obj{
+        // Simple non-interactive object
+        {
+            Name:     "stone",
+            ObjId:    0,
+            Flags:    0,
+            Textures: []uint16{10}, // Single texture
+        },
+        // Interactive but non-stateful
+        {
+            Name:         "chest",
+            ObjId:        1,
+            Flags:        grpgobj.ObjFlags(grpgobj.INTERACT),
+            Textures:     []uint16{11},
+            InteractText: "Open",
+        },
+        // Stateful but non-interactive
+        {
+            Name:     "torch",
+            ObjId:    2,
+            Flags:    grpgobj.ObjFlags(grpgobj.STATE),
+            Textures: []uint16{12, 13}, // State 0: lit, State 1: unlit
+        },
+        // Both stateful and interactive
+        {
+            Name:         "berry_bush",
+            ObjId:        3,
+            Flags:        grpgobj.ObjFlags(grpgobj.STATE | grpgobj.INTERACT),
+            Textures:     []uint16{14, 15}, // State 0: with berries, State 1: empty
+            InteractText: "Harvest",
+        },
+    }
+
+    buf := gbuf.NewEmptyGBuf()
+    grpgobj.WriteHeader(buf)
+    grpgobj.WriteObjs(buf, objs)
+
+    os.WriteFile("objects.grpgobj", buf.Bytes(), 0644)
+}
+```
+
+### Loading and Using Objects
+
+```go
+package main
+
+import (
+    "fmt"
+    "grpg/data-go/gbuf"
+    "grpg/data-go/grpgobj"
+    "os"
+)
+
+func main() {
+    data, _ := os.ReadFile("objects.grpgobj")
+    buf := gbuf.NewGBuf(data)
+
+    header, _ := grpgobj.ReadHeader(buf)
+    objs, _ := grpgobj.ReadObjs(buf)
+
+    // Build lookup map
+    objMap := make(map[uint16]grpgobj.Obj)
+    for _, obj := range objs {
+        objMap[obj.ObjId] = obj
+    }
+
+    // Get texture for a specific object state
+    berryBush := objMap[3]
+    if grpgobj.IsFlagSet(berryBush.Flags, grpgobj.STATE) {
+        state := 0 // With berries
+        textureID := berryBush.Textures[state]
+        fmt.Printf("Berry bush state %d uses texture %d\n", state, textureID)
+    }
+
+    // Check if object is interactable
+    if grpgobj.IsFlagSet(berryBush.Flags, grpgobj.INTERACT) {
+        fmt.Printf("Can interact: %s\n", berryBush.InteractText)
+    }
+}
+```
+
+## Binary Format Details
+
+### File Extension
+
+`.grpgobj`
+
+### Magic Number
+
+`GRPGOBJ\0` (ASCII: `0x47 0x52 0x50 0x47 0x4F 0x42 0x4A 0x00`)
+
+### Flag Encoding
+
+Flags are stored as a single byte with bit flags:
+
+```
+Bit | Flag     | Description
+----|----------|----------------------------------
+0   | STATE    | Object has multiple states
+1   | INTERACT | Object is interactable
+2-7 | Unused   | Reserved for future use
+```
+
+Examples:
+- `0x00` (0b00000000): No flags
+- `0x01` (0b00000001): STATE only
+- `0x02` (0b00000010): INTERACT only
+- `0x03` (0b00000011): STATE and INTERACT
+
+### Stateful Objects
+
+For objects with the STATE flag:
+- The texture array index represents the state number
+- State transitions are handled by game logic
+- All states must have a texture (minimum 1)
+
+Example: Berry bush with 2 states:
+```go
+Textures: []uint16{14, 15}
+// State 0 (has berries): texture 14
+// State 1 (harvested):   texture 15
+```
+
+### Example Binary Layout
+
+```
+Offset | Bytes                           | Description
+-------|----------------------------------|---------------------------
+0x00   | 47 52 50 47 4F 42 4A 00         | Magic "GRPGOBJ\0"
+0x08   | 00 02                           | Count: 2 objects
+0x0A   | 00 00 00 05                     | Name length: 5
+0x0E   | 73 74 6F 6E 65                  | Name: "stone"
+0x13   | 00 02                           | Object ID: 2
+0x15   | 00                              | Flags: 0 (none)
+0x16   | 00 01                           | Texture ID: 1 (non-stateful)
+0x18   | 00 00 00 0A                     | Name length: 10
+0x1C   | 62 65 72 ... 73 68              | Name: "berry_bush"
+0x26   | 00 04                           | Object ID: 4
+0x28   | 03                              | Flags: 0x03 (STATE|INTERACT)
+0x29   | 00 02                           | Texture count: 2
+0x2B   | 00 02                           | Texture 0: 2
+0x2D   | 00 03                           | Texture 1: 3
+0x2F   | 00 00 00 07                     | Interact text length: 7
+0x33   | 48 61 72 ... 74                 | "Harvest"
+```
+
+## Size Limits
+
+- **Maximum Objects:** 65,535 (uint16 count)
+- **Maximum Object ID:** 65,535 (uint16 range)
+- **Maximum Texture ID:** 65,535 (uint16 range)
+- **Maximum States:** 65,535 (uint16 texture count, impractical)
+- **Maximum Name/Text Length:** 4,294,967,295 bytes (uint32 length)
+
+## Usage in Maps
+
+Objects are placed in maps via [GRPGMAP](/api/grpgmap) files:
+
+```go
+type Zone struct {
+    Tiles [256]Tile
+    Objs  [256]Obj  // Each element is a uint16 object ID
+}
+```
+
+## Error Handling
+
+Common errors when reading GRPGOBJ files:
+
+- **Invalid magic number:** File is not a GRPGOBJ file
+- **Insufficient data:** File is truncated
+- **Invalid object count:** Corrupted count field
+- **Missing textures:** Stateful object with no textures
+- **Missing interact text:** INTERACT flag set but no text
+
+## Related Formats
+
+- [GRPGTEX](/api/grpgtex) - Texture atlas referenced by texture IDs
+- [GRPGMAP](/api/grpgmap) - Map files that place objects
+- [GRPGITEM](/api/grpgitem) - Items that may reference similar textures
+- [GBuf](/api/gbuf) - Binary buffer used for serialization

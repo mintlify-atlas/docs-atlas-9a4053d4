@@ -1,0 +1,523 @@
+---
+title: Network Handlers
+description: Packet handlers and network protocol documentation
+---
+
+## Overview
+
+GRPG uses a binary packet-based protocol for client-server communication. All packets have an opcode that identifies the packet type and a length field.
+
+## Packet Structure
+
+All packets follow this structure:
+
+```
+[Opcode: 1 byte][Length: 2 bytes][Payload: variable]
+```
+
+- **Opcode**: Identifies the packet type
+- **Length**: Size of the payload in bytes (-1 indicates variable length)
+- **Payload**: Packet-specific data
+
+---
+
+## Client-to-Server Packets (c2s)
+
+Packets sent from the client to the server.
+
+### Packet Interface
+
+```go
+type Packet interface {
+    Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, scriptManager *scripts.ScriptManager)
+}
+```
+
+All client packets implement this interface.
+
+---
+
+### Login (0x01)
+
+```go
+Opcode: 0x01
+Length: -1 (variable)
+```
+
+Authenticates a player and initializes their session.
+
+**Payload:**
+- Username (string with length prefix)
+
+**Handler:** Special case - handled before player object exists
+
+---
+
+### Move (0x02)
+
+```go
+Opcode: 0x02
+Length: 9 bytes
+```
+
+Moves the player to a new position.
+
+**Payload:**
+
+<ParamField path="newX" type="uint32">
+  New X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="newY" type="uint32">
+  New Y coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="facing" type="byte">
+  New facing direction (0=UP, 1=RIGHT, 2=DOWN, 3=LEFT)
+</ParamField>
+
+**Handler Implementation:**
+
+```go
+func (m *Move) Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, scriptManager *scripts.ScriptManager) {
+    newX, _ := buf.ReadUint32()
+    newY, _ := buf.ReadUint32()
+    facing, _ := buf.ReadByte()
+    
+    // Validate movement
+    if newX > game.MaxX || newY > game.MaxY || facing > 3 {
+        return
+    }
+    
+    // Check for collision
+    if _, exists := game.CollisionMap[util.Vector2I{X: newX, Y: newY}]; exists {
+        return
+    }
+    
+    prevChunkPos := player.ChunkPos
+    chunkPos := util.Vector2I{X: newX / 16, Y: newY / 16}
+    crossedZone := chunkPos != player.ChunkPos
+    
+    // Update player state
+    player.Pos.X = newX
+    player.Pos.Y = newY
+    player.ChunkPos = chunkPos
+    player.Facing = shared.Direction(facing)
+    
+    // Broadcast to nearby players
+    network.UpdatePlayersByChunk(chunkPos, game, &s2c.PlayersUpdate{ChunkPos: chunkPos})
+    
+    // Clear dialogue if player moves
+    if player.DialogueQueue.MaxIndex > 0 {
+        player.DialogueQueue.Clear()
+        network.SendPacket(player.Conn, &s2c.Talkbox{Type: s2c.CLEAR}, game)
+    }
+    
+    // Send chunk updates if crossed chunk boundary
+    if crossedZone {
+        network.UpdatePlayersByChunk(prevChunkPos, game, &s2c.PlayersUpdate{ChunkPos: prevChunkPos})
+        network.SendPacket(player.Conn, &s2c.ObjUpdate{ChunkPos: chunkPos, Rebuild: true}, game)
+        network.SendPacket(player.Conn, &s2c.NpcUpdate{ChunkPos: chunkPos}, game)
+    }
+}
+```
+
+---
+
+### Interact (0x03)
+
+```go
+Opcode: 0x03
+Length: 10 bytes
+```
+
+Interacts with an object (tree, rock, berry bush, etc.).
+
+**Payload:**
+
+<ParamField path="objId" type="uint16">
+  Object ID (2 bytes)
+</ParamField>
+
+<ParamField path="x" type="uint32">
+  Object X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="y" type="uint32">
+  Object Y coordinate (4 bytes)
+</ParamField>
+
+**Handler Implementation:**
+
+```go
+func (i *Interact) Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, scriptManager *scripts.ScriptManager) {
+    objId, _ := buf.ReadUint16()
+    x, _ := buf.ReadUint32()
+    y, _ := buf.ReadUint32()
+    
+    objPos := util.Vector2I{X: x, Y: y}
+    
+    // Validate player is facing the object
+    if player.GetFacingCoord() != objPos {
+        return
+    }
+    
+    // Validate object exists
+    if _, ok := game.Objs[objPos]; !ok {
+        return
+    }
+    
+    // Execute script
+    script := scriptManager.InteractScripts[scripts.ObjConstant(objId)]
+    script(scripts.NewObjInteractCtx(game, player, objPos))
+}
+```
+
+---
+
+### Talk (0x04)
+
+```go
+Opcode: 0x04
+Length: 10 bytes
+```
+
+Initiates conversation with an NPC.
+
+**Payload:**
+
+<ParamField path="npcId" type="uint16">
+  NPC ID (2 bytes)
+</ParamField>
+
+<ParamField path="x" type="uint32">
+  NPC X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="y" type="uint32">
+  NPC Y coordinate (4 bytes)
+</ParamField>
+
+**Handler Implementation:**
+
+```go
+func (t *Talk) Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, scriptManager *scripts.ScriptManager) {
+    npcId, _ := buf.ReadUint16()
+    x, _ := buf.ReadUint32()
+    y, _ := buf.ReadUint32()
+    
+    npcPos := util.Vector2I{X: x, Y: y}
+    
+    // Validate player is facing the NPC
+    if player.GetFacingCoord() != npcPos {
+        return
+    }
+    
+    // Validate NPC exists
+    if _, ok := game.TrackedNpcs[npcPos]; !ok {
+        return
+    }
+    
+    // Execute script
+    script := scriptManager.NpcTalkScripts[scripts.NpcConstant(npcId)]
+    script(scripts.NewNpcTalkCtx(player, game, scripts.NpcConstant(npcId)))
+}
+```
+
+---
+
+### Continue (0x05)
+
+```go
+Opcode: 0x05
+Length: 0 bytes
+```
+
+Advances to the next message in an NPC dialogue.
+
+**Payload:** None
+
+**Handler Implementation:**
+
+```go
+func (c *Continue) Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, scriptManager *scripts.ScriptManager) {
+    SendDialoguePacket(player, game, player.DialogueQueue.ActiveNpcId)
+}
+
+func SendDialoguePacket(player *shared.Player, game *shared.Game, npcId uint16) {
+    if player.DialogueQueue.Index >= player.DialogueQueue.MaxIndex {
+        // End of dialogue
+        network.SendPacket(player.Conn, &s2c.Talkbox{
+            Type: s2c.CLEAR,
+            Msg:  "",
+        }, game)
+        return
+    }
+    
+    pktType := dqTypeToPacketType(player.DialogueQueue.Dialogues[player.DialogueQueue.Index].Type)
+    
+    network.SendPacket(player.Conn, &s2c.Talkbox{
+        Type:  pktType,
+        NpcId: npcId,
+        Msg:   player.DialogueQueue.Dialogues[player.DialogueQueue.Index].Content,
+    }, game)
+    player.DialogueQueue.Index++
+}
+```
+
+---
+
+## Server-to-Client Packets (s2c)
+
+Packets sent from the server to the client.
+
+### Packet Interface
+
+```go
+type Packet interface {
+    Opcode() byte
+    Handle(buf *gbuf.GBuf, game *shared.Game)
+}
+```
+
+---
+
+### LoginAccepted (0x01)
+
+```go
+Opcode: 0x01
+```
+
+Confirms successful authentication.
+
+**Payload:** None
+
+---
+
+### LoginRejected (0x02)
+
+```go
+Opcode: 0x02
+```
+
+Rejects login attempt with a reason.
+
+**Payload:**
+- Reason string
+
+---
+
+### PlayersUpdate (0x03)
+
+```go
+Opcode: 0x03
+```
+
+Sends all players in a chunk to nearby clients.
+
+**Payload:**
+
+<ParamField path="packetLen" type="uint16">
+  Total packet length (2 bytes)
+</ParamField>
+
+<ParamField path="playerCount" type="uint16">
+  Number of players in payload (2 bytes)
+</ParamField>
+
+For each player:
+
+<ParamField path="name" type="string">
+  Player name (4 byte length + string)
+</ParamField>
+
+<ParamField path="x" type="uint32">
+  X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="y" type="uint32">
+  Y coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="facing" type="byte">
+  Facing direction (1 byte)
+</ParamField>
+
+---
+
+### ObjUpdate (0x04)
+
+```go
+Opcode: 0x04
+```
+
+Updates objects in a chunk.
+
+**Payload:**
+
+<ParamField path="ChunkPos" type="util.Vector2I">
+  Chunk to update
+</ParamField>
+
+<ParamField path="Rebuild" type="bool">
+  Whether to rebuild all objects (true) or just update states (false)
+</ParamField>
+
+---
+
+### InventoryUpdate (0x05)
+
+```go
+Opcode: 0x05
+```
+
+Sends updated inventory to player.
+
+**Payload:**
+- Full inventory state (24 slots)
+
+---
+
+### NpcUpdate (0x06)
+
+```go
+Opcode: 0x06
+```
+
+Sends all NPCs in a chunk.
+
+**Payload:**
+
+<ParamField path="packetLen" type="uint16">
+  Total packet length (2 bytes)
+</ParamField>
+
+<ParamField path="npcCount" type="uint16">
+  Number of NPCs (2 bytes)
+</ParamField>
+
+For each NPC:
+
+<ParamField path="x" type="uint32">
+  X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="y" type="uint32">
+  Y coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="npcId" type="uint16">
+  NPC type ID (2 bytes)
+</ParamField>
+
+---
+
+### Talkbox (0x07)
+
+```go
+Opcode: 0x07
+```
+
+Displays dialogue to the player.
+
+**Payload:**
+
+<ParamField path="Type" type="TalkboxType">
+  CLEAR (0), NPC (1), or PLAYER (2)
+</ParamField>
+
+<ParamField path="NpcId" type="uint16">
+  NPC ID (if Type == NPC)
+</ParamField>
+
+<ParamField path="Msg" type="string">
+  Dialogue message
+</ParamField>
+
+---
+
+### SkillUpdate (0x08)
+
+```go
+Opcode: 0x08
+```
+
+Sends updated skill levels and XP.
+
+**Payload:**
+
+<ParamField path="SkillIds" type="[]shared.Skill">
+  List of skills that changed
+</ParamField>
+
+<ParamField path="Player" type="*shared.Player">
+  Player data with updated skills
+</ParamField>
+
+---
+
+## Packet Registry
+
+### Client-to-Server
+
+```go
+var Packets = map[byte]PacketData{
+    0x01: LoginData,
+    0x02: MoveData,
+    0x03: InteractData,
+    0x04: TalkData,
+    0x05: ContinueData,
+}
+```
+
+### Server-to-Client
+
+Packets are identified by their `Opcode()` method.
+
+---
+
+## Network Utilities
+
+### UpdatePlayersByChunk
+
+```go
+func UpdatePlayersByChunk(chunkPos util.Vector2I, game *shared.Game, packet s2c.Packet)
+```
+
+Sends a packet to all players in the specified chunk.
+
+---
+
+### SendPacket
+
+```go
+func SendPacket(conn net.Conn, packet s2c.Packet, game *shared.Game)
+```
+
+Sends a packet to a specific connection.
+
+---
+
+## Implementation Example
+
+```go
+// Custom packet handler
+type CustomPacket struct{}
+
+func (c *CustomPacket) Handle(buf *gbuf.GBuf, game *shared.Game, player *shared.Player, sm *scripts.ScriptManager) {
+    // Read packet data
+    value, err := buf.ReadUint32()
+    if err != nil {
+        log.Printf("Failed to read packet: %v", err)
+        return
+    }
+    
+    // Process the packet
+    // ...
+    
+    // Send response
+    network.SendPacket(player.Conn, &s2c.SomeResponse{
+        Data: value,
+    }, game)
+}
+```

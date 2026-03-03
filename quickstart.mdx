@@ -1,80 +1,407 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get GRPG running locally in under 5 minutes
 ---
 
-## Get started in three steps
+# Quickstart Guide
 
-Get your documentation site running locally and make your first customization.
+This guide will help you get a GRPG server and client running on your local machine.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Before you begin, ensure you have:
 
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- **Go 1.24+** installed ([download here](https://go.dev/dl/))
+- **Git** for cloning the repository
+- **SQLite3** development libraries (for player database)
+- **Basic terminal/command line knowledge**
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  On Ubuntu/Debian: `sudo apt-get install libsqlite3-dev`  
+  On macOS: SQLite3 is included by default
 </Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/grian32/grpg.git
+    cd grpg
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    GRPG uses Go modules with local replacements for the `data-go` package. Navigate to each component and install dependencies:
+
+    ```bash
+    # Install server dependencies
+    cd server-go
+    go mod download
+    cd ..
+
+    # Install client dependencies
+    cd client-go
+    go mod download
+    cd ..
+    ```
+
+    <Note>
+      The `data-go` package is shared between components and uses Go module replacement:
+      ```go
+      replace grpg/data-go => ../data-go
+      ```
+    </Note>
+  </Step>
+
+  <Step title="Prepare game assets">
+    GRPG requires binary asset files (maps, textures, NPCs, etc.). You'll need to either:
+
+    - Download pre-built assets (if available from the project)
+    - Build assets using the data-packer tool (see [Data Packer](#using-the-data-packer))
+
+    Create an assets directory structure:
+    ```bash
+    mkdir -p ../grpg-assets/assets
+    mkdir -p ../grpg-assets/maps
+    ```
+  </Step>
+
+  <Step title="Start the server">
+    The server runs on port **4422** by default and creates a SQLite database for player persistence:
+
+    ```bash
+    cd server-go
+    go run main.go assets.go
+    ```
+
+    You should see output like:
+    ```
+    Listening on 127.0.0.1:4422
+    ```
+
+    <Note>
+      The server automatically runs database migrations on startup. The first run creates `players.db` with the initial schema.
+    </Note>
+  </Step>
+
+  <Step title="Launch the client">
+    In a new terminal window:
+
+    ```bash
+    cd client-go
+    go run main.go
+    ```
+
+    This opens the game client window (1152x960 default resolution) with a login screen.
+  </Step>
+
+  <Step title="Connect and play">
+    1. Enter a username in the login screen
+    2. Click connect (or press Enter)
+    3. The server will create a new player or load your existing save
+    4. You'll spawn at position (0, 0) in the game world
+
+    **Controls:**
+    - Arrow keys: Move player
+    - Space: Interact with objects/NPCs
+    - I: Toggle inventory
+    - Tab: Switch UI panels
+  </Step>
+</Steps>
+
+## Understanding the Server
+
+Let's look at what happens when the server starts:
+
+```go server-go/main.go
+func main() {
+    // Open SQLite database for player persistence
+    db, err := sql.Open("sqlite3", "./players.db")
+    if err != nil {
+        log.Fatal("Failed to connect to DB: ", err)
+    }
+    defer db.Close()
+
+    g.Database = db
+
+    // Run database migrations
+    driver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
+    m, err := migrate.NewWithDatabaseInstance("file://db/migrations", "sqlite3", driver)
+    if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+        log.Fatal("Failed to migrate: ", err)
+    }
+
+    // Start TCP listener on port 4422
+    listener, err := net.Listen("tcp", ":4422")
+    if err != nil {
+        log.Fatal("Failed to start: ", err)
+    }
+
+    // Load game assets (objects, NPCs, maps)
+    objs, err := LoadObjs(assetsDirectory + "assets/objs.grpgobj")
+    npcs, err := LoadNpcs(assetsDirectory + "assets/npcs.grpgnpc")
+    LoadMaps(assetsDirectory+"maps/", g, objs)
+
+    // Initialize script manager for content
+    scriptManager = scripts.NewScriptManager(g, npcs)
+
+    // Start game loop
+    packets := make(chan ChanPacket, 1000)
+    go cycle(packets)
+
+    // Accept client connections
+    log.Println("Listening on 127.0.0.1:4422")
+    for {
+        conn, err := listener.Accept()
+        if err != nil {
+            log.Printf("Failed to accept connection: %v\n", err)
+            continue
+        }
+        go handleClient(conn, g, packets)
+    }
+}
+```
+
+Key components:
+- **Database**: SQLite with automatic migrations from `db/migrations/`
+- **Network**: TCP listener on port 4422
+- **Assets**: Binary files loaded from `grpg-assets/`
+- **Game Loop**: 60ms tick cycle processing packets and NPC movements
+
+## Understanding the Client
+
+The client connects and renders using Ebiten:
+
+```go client-go/main.go
+func main() {
+    // Configure Ebiten window
+    ebiten.SetWindowSize(int(g.ScreenWidth), int(g.ScreenHeight))
+    ebiten.SetWindowTitle("GRPG Client")
+    ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+    ebiten.SetTPS(60)  // 60 ticks per second
+
+    // Start with login screen
+    g.SceneManager.SwitchTo(&game.LoginScreen{Game: g})
+
+    // Connect to server
+    defer g.Conn.Close()
+
+    // Start packet processing goroutine
+    serverPackets := make(chan network.ChanPacket, 100)
+    go network.ReadServerPackets(g.Conn, serverPackets)
+
+    // Run game
+    ebGame := &GameWrapper{
+        gsm:     g.SceneManager,
+        packets: serverPackets,
+        game:    g,
+    }
+    if err := ebiten.RunGame(ebGame); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+## Using the Data Packer
+
+The `data-packer` tool converts human-readable manifests into optimized binary formats:
+
+```bash
+cd data-packer
+
+# Pack textures (PNG → GRPGTEX with JPEG XL)
+go run main.go tex -m manifest.gcfg -o textures.grpgtex
+
+# Pack tiles
+go run main.go tile -m tiles.gcfg -o tiles.grpgtile -t textures.grpgtex
+
+# Pack objects
+go run main.go obj -m objs.gcfg -o objs.grpgobj -t textures.grpgtex
+
+# Pack NPCs
+go run main.go npc -m npcs.gcfg -o npcs.grpgnpc -t textures.grpgtex
+
+# Pack items
+go run main.go item -m items.gcfg -o items.grpgitem -t textures.grpgtex
+```
+
+<Warning>
+  The data-packer uses [GCFG](https://github.com/grian32/gcfg) manifest format. Manifest structure should match the binary format fields 1:1, with the only transformation being PNG → JPEG XL for textures.
+</Warning>
+
+## Creating Your First Interactive Object
+
+Let's create a simple berry bush that players can interact with:
+
+<Steps>
+  <Step title="Create the content script">
+    Create a new file `server-go/content/my_berry_bush.go`:
+
+    ```go
+    package content
+
+    import (
+        "server/scripts"
+        "server/shared"
+    )
+
+    func init() {
+        scripts.OnObjInteract(scripts.BERRY_BUSH, func(ctx *scripts.ObjInteractCtx) {
+            // Check if bush has berries (state 0 = has berries)
+            if ctx.GetObjState() == 0 {
+                // Deplete the bush
+                ctx.SetObjState(1)
+                
+                // Give player berries
+                ctx.PlayerInvAdd(scripts.BERRIES)
+                
+                // Award XP
+                ctx.PlayerAddXp(shared.Foraging, 100)
+
+                // Regenerate after 100 ticks (~6 seconds)
+                ctx.AddTimer(100, func() {
+                    ctx.SetObjState(0)
+                })
+            }
+        })
+    }
+    ```
+  </Step>
+
+  <Step title="Import the content package">
+    The content package is automatically imported in `server-go/main.go`:
+    ```go
+    import (
+        _ "server/content"  // Runs all init() functions
+        // ... other imports
+    )
+    ```
+  </Step>
+
+  <Step title="Restart the server">
+    ```bash
+    cd server-go
+    go run main.go assets.go
+    ```
+
+    Your berry bush is now interactive! Walk up to it and press Space to collect berries.
+  </Step>
+</Steps>
+
+## Creating Your First NPC
+
+Here's how to spawn an NPC with dialogue:
+
+```go server-go/content/my_npc.go
+package content
+
+import "server/scripts"
+
+func init() {
+    // Spawn NPC at position (3, 3) with wander range of 2 tiles
+    scripts.SpawnNpc(scripts.TEST, 3, 3, 2)
+
+    // Define dialogue interaction
+    scripts.OnTalkNpc(scripts.TEST, func(ctx *scripts.NpcTalkCtx) {
+        ctx.ClearDialogueQueue()
+
+        ctx.TalkPlayer("Hello, test")
+        ctx.TalkNpc("...")
+        ctx.TalkPlayer("See you!")
+
+        ctx.StartDialogue()
+    })
+}
+```
+
+The NPC will:
+- Spawn at coordinates (3, 3)
+- Wander up to 2 tiles in any direction
+- Respond with a 3-line dialogue when talked to
+
+## Database Schema
+
+GRPG uses SQLite with migration support. The initial schema:
+
+```sql db/migrations/000001_initial.up.sql
+CREATE TABLE players (
+    player_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    x INTEGER NOT NULL,
+    y INTEGER NOT NULL
+);
+```
+
+Additional migrations add inventory, skills, and XP tracking.
+
+## Network Protocol
+
+GRPG uses a custom binary protocol with **GBuf** for efficient serialization:
+
+```go data-go/gbuf/gbuf.go
+// Writing data
+buf := gbuf.NewEmptyGBuf()
+buf.WriteUint16(playerID)
+buf.WriteString("Hello")
+buf.WriteBool(true)
+
+// Reading data
+buf := gbuf.NewGBuf(bytes)
+playerID, _ := buf.ReadUint16()
+message, _ := buf.ReadString()
+isActive, _ := buf.ReadBool()
+```
+
+All data is **big-endian** encoded for network transmission.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Server fails to start: 'Failed to connect to DB'">
+    Ensure SQLite3 development libraries are installed:
+    - Ubuntu/Debian: `sudo apt-get install libsqlite3-dev`
+    - macOS: Included by default
+    - Windows: Install from [sqlite.org](https://sqlite.org/download.html)
+  </Accordion>
+
+  <Accordion title="Client can't connect to server">
+    - Verify the server is running and shows "Listening on 127.0.0.1:4422"
+    - Check that port 4422 isn't blocked by a firewall
+    - Ensure both client and server are running on the same machine
+  </Accordion>
+
+  <Accordion title="Assets not loading">
+    The server expects assets at `../../grpg-assets/` relative to `server-go/`. You can:
+    - Change `assetsDirectory` in `server-go/main.go`
+    - Create the directory structure and use the data-packer to build assets
+  </Accordion>
+
+  <Accordion title="Build errors with 'data-go' package">
+    Ensure you're in the correct directory. The `go.mod` uses local replacement:
+    ```go
+    replace grpg/data-go => ../data-go
+    ```
+    This requires the `data-go` directory to exist at the same level as `server-go` and `client-go`.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Deep Dive" icon="diagram-project" href="/architecture">
+    Learn about GRPG's networking, tick system, and binary formats
+  </Card>
+  
+  <Card title="Content Scripting" icon="code" href="/systems/content-scripting">
+    Master content scripting for creating NPCs, objects, and interactions
+  </Card>
+  
+  <Card title="Map Editor Guide" icon="map" href="/tools/map-editor">
+    Build custom worlds with the chunk-based map editor
+  </Card>
+  
+  <Card title="API Reference" icon="book" href="/api/gbuf">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>

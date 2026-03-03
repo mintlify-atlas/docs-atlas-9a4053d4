@@ -1,0 +1,175 @@
+---
+title: 'Assets Server'
+description: 'HTTP file server for serving GRPG asset files'
+---
+
+## Overview
+
+The **Assets Server** is a simple HTTP file server that serves asset files from a local directory. It's primarily used by the GRPGScript Language Server Protocol (LSP) to provide asset file access during development.
+
+## Installation
+
+Build the assets server from source:
+
+```bash
+cd ~/workspace/source/assets-server
+go build -o assets-server
+```
+
+## Running the Server
+
+Start the assets server:
+
+```bash
+./assets-server
+```
+
+The server will start on port **4022** and serve files from the `./assets` directory.
+
+**Output:**
+```
+serving ./assets on port 4022
+```
+
+## Configuration
+
+### Port
+
+The server runs on port `4022` by default. This is hardcoded in the application.
+
+### Assets Directory
+
+The server serves files from the `./assets` directory relative to where the server is executed.
+
+**Directory Structure:**
+```
+./assets/
+├── textures/
+├── tiles/
+├── objects/
+└── ... (other asset files)
+```
+
+## API Endpoints
+
+### GET /assets/*
+
+Serves static files from the assets directory.
+
+**Example Requests:**
+```bash
+# Get a texture file
+curl http://localhost:4022/assets/textures/grass.png
+
+# Get a data file
+curl http://localhost:4022/assets/tiles/overworld.grpgtile
+```
+
+## Use Cases
+
+### GRPGScript LSP Integration
+
+The primary use case is serving asset files to the GRPGScript Language Server:
+
+<Steps>
+  <Step title="Start the Assets Server">
+    Run the assets server in your development environment.
+  </Step>
+  
+  <Step title="Configure LSP">
+    Point the GRPGScript LSP to `http://localhost:4022/assets/` for asset resolution.
+  </Step>
+  
+  <Step title="Develop Scripts">
+    The LSP can now access and validate asset references in your GRPGScript code.
+  </Step>
+</Steps>
+
+### Local Development
+
+Developers can use the assets server to:
+- Test asset loading in web-based tools
+- Serve assets to the game client during local testing
+- Provide a simple HTTP interface for asset management tools
+
+## Implementation Details
+
+The server is implemented using Go's standard `net/http` package:
+
+```go
+func main() {
+    fs := http.FileServer(http.Dir("./assets"))
+    http.Handle("/assets/", http.StripPrefix("/assets/", fs))
+    
+    log.Printf("serving ./assets on port 4022")
+    log.Fatal(http.ListenAndServe(":4022", nil))
+}
+```
+
+**Key Features:**
+- Static file serving with automatic content type detection
+- Directory listing disabled by default
+- Efficient file streaming for large assets
+
+## Security Considerations
+
+<Warning>
+  The assets server is intended for **local development only**. It does not include authentication, rate limiting, or other security features required for production use.
+</Warning>
+
+**Best Practices:**
+- Only run on localhost/127.0.0.1
+- Do not expose port 4022 to external networks
+- Only place non-sensitive asset files in the `./assets` directory
+
+## Future Enhancements
+
+The assets server is intentionally minimal. Planned improvements include:
+
+- Configurable port via command-line flag or environment variable
+- Configurable assets directory path
+- CORS headers for web-based tool integration
+- Asset metadata endpoints (file info, checksums)
+- Hot-reload support for asset file changes
+- Authentication for team development environments
+
+## Source Code
+
+The assets server source code is located at:
+```
+~/workspace/source/assets-server/
+```
+
+Key files:
+- `main.go:8` - HTTP server implementation
+- `README.md` - Basic usage documentation
+
+## Troubleshooting
+
+### Port Already in Use
+
+If you see an error that port 4022 is already in use:
+
+```bash
+# Find the process using port 4022
+lsof -i :4022
+
+# Kill the process
+kill -9 <PID>
+```
+
+### Assets Not Found
+
+If assets are not accessible:
+
+1. Verify the `./assets` directory exists relative to where you run the server
+2. Check file permissions on the assets directory
+3. Ensure the file path in your request matches the actual file location
+
+### Cannot Connect to Server
+
+If clients cannot connect:
+
+1. Verify the server is running: `curl http://localhost:4022/assets/`
+2. Check firewall settings if accessing from another machine
+3. Ensure you're using the correct port (4022)

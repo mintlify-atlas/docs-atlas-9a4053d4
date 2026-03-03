@@ -1,0 +1,133 @@
+---
+title: Game Loop
+description: Core game loop implementation using Ebiten game engine
+---
+
+The GRPG client implements the game loop using the [Ebiten](https://ebiten.org/) game engine. The `GameWrapper` struct implements Ebiten's `Game` interface to handle updates, rendering, and layout.
+
+## GameWrapper
+
+The `GameWrapper` is the main entry point for the Ebiten game loop. It wraps the game state and manages packet processing, scene updates, and rendering.
+
+```go main.go:46-50
+type GameWrapper struct {
+	gsm     *shared.GSceneManager
+	packets chan network.ChanPacket
+	game    *shared.Game
+}
+```
+
+### Fields
+
+- `gsm`: Scene manager that handles switching between different game scenes (login screen, playground, etc.)
+- `packets`: Channel for receiving network packets from the server
+- `game`: Main game state containing player data, world state, connections, etc.
+
+## Update Method
+
+The `Update` method is called every tick (60 TPS by default) and handles:
+1. Processing incoming network packets
+2. Maintaining the window aspect ratio
+3. Updating the current scene
+
+```go main.go:52-64
+func (g *GameWrapper) Update() error {
+	processPackets(g.packets, g.game)
+	ww, wh := ebiten.WindowSize();
+	currRatio := float64(ww) / float64(wh);
+
+	if currRatio > g.game.ScreenRatio {
+		ebiten.SetWindowSize(int(float64(wh) * g.game.ScreenRatio), wh)
+	} else {
+		ebiten.SetWindowSize(ww, int(float64(ww) / g.game.ScreenRatio))
+	}
+
+	return g.gsm.CurrentScene.Update()
+}
+```
+
+## Draw Method
+
+The `Draw` method is called every frame and delegates rendering to the current scene.
+
+```go main.go:66-68
+func (g *GameWrapper) Draw(screen *ebiten.Image) {
+	g.gsm.CurrentScene.Draw(screen)
+}
+```
+
+## Layout Method
+
+The `Layout` method defines the logical screen dimensions used for rendering, regardless of actual window size.
+
+```go main.go:70-72
+func (g *GameWrapper) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
+	return int(g.game.ScreenWidth), int(g.game.ScreenHeight)
+}
+```
+
+Returns the fixed logical screen size (1152x960 pixels).
+
+## Packet Processing
+
+Packets from the server are processed each frame by draining the packet channel and invoking the appropriate handlers.
+
+```go main.go:117-126
+func processPackets(packetChan <-chan network.ChanPacket, g *shared.Game) {
+	for {
+		select {
+		case packet := <-packetChan:
+			packet.PacketData.Handler.Handle(packet.Buf, g)
+		default:
+			return
+		}
+	}
+}
+```
+
+This processes all available packets in the channel without blocking.
+
+## Initialization
+
+The game loop is initialized in `main()` and started with `ebiten.RunGame()`:
+
+```go main.go:86-110
+ebiten.SetWindowSize(int(g.ScreenWidth), int(g.ScreenHeight))
+ebiten.SetWindowTitle(*windowTitle)
+ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+ebiten.SetWindowSizeLimits(int(g.ScreenWidth / 2), int(g.ScreenHeight / 2), int(g.ScreenWidth), int(g.ScreenHeight))
+ebiten.SetTPS(60)
+
+g.SceneManager.SwitchTo(&game.LoginScreen{
+	Game: g,
+})
+
+defer g.Conn.Close()
+
+serverPackets := make(chan network.ChanPacket, 100)
+
+go network.ReadServerPackets(g.Conn, serverPackets)
+
+ebGame := &GameWrapper{
+	gsm:     g.SceneManager,
+	packets: serverPackets,
+	game:    g,
+}
+
+if err := ebiten.RunGame(ebGame); err != nil {
+	log.Fatal(err)
+}
+```
+
+### Configuration
+
+- **Window size**: 1152x960 pixels (resizable)
+- **TPS (Ticks Per Second)**: 60
+- **Aspect ratio**: Locked to 1152:960 (1.2)
+- **Initial scene**: Login screen
+- **Packet buffer**: 100 packets
+
+## See Also
+
+- [Rendering](/api/client/rendering) - Scene rendering system
+- [Network](/api/client/network) - Network packet handling

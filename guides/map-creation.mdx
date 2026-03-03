@@ -1,0 +1,318 @@
+---
+title: Map Creation Guide
+description: Create game maps using the GRPG Map Editor and chunk system
+---
+
+GRPG uses a chunk-based map system where each chunk is a 16x16 grid of tiles and objects. This guide shows you how to create and edit maps using the Map Editor.
+
+## Understanding Chunks
+
+GRPG's world is divided into **chunks** - fixed-size 16x16 tile grids that are loaded and unloaded as players move through the world.
+
+<Info>
+  Each chunk is identified by X/Y coordinates. For example, chunk (0, 0) contains world tiles (0-15, 0-15), and chunk (1, 0) contains tiles (16-31, 0-15).
+</Info>
+
+### Chunk Structure
+
+From `data-go/grpgmap/grpgmap.go:7`:
+
+```go
+type Zone struct {
+    Tiles [256]Tile  // 16x16 = 256 tiles
+    Objs  [256]Obj   // 16x16 = 256 object slots
+}
+```
+
+Each chunk contains:
+- **256 tiles** - The ground layer (grass, stone, water, etc.)
+- **256 object slots** - Interactive objects, NPCs, decorations (can be empty)
+
+## Getting Started with the Map Editor
+
+<Steps>
+  <Step title="Launch the Editor">
+    Build and run the map editor from the source:
+
+    ```bash
+    cd map-editor
+    go build
+    ./map-editor
+    ```
+
+    The editor window opens with three panels:
+    - **Editor** - 16x16 grid for placing tiles/objects
+    - **Controls** - Buttons for loading assets and saving
+    - **Selector** - Tabbed interface for choosing tiles and objects
+  </Step>
+
+  <Step title="Load Your Assets">
+    Before you can edit, load your game assets:
+
+    1. Click **Load Textures** → Select your `.grpgtex` file
+    2. Click **Load Tiles** → Select your `.grpgtile` file
+    3. Click **Load Objs** → Select your `.grpgobj` file
+
+    <Note>
+      Load textures first, as tiles and objects reference texture IDs.
+    </Note>
+  </Step>
+
+  <Step title="Set Chunk Coordinates">
+    In the Controls panel, set the chunk you're editing:
+
+    - **Chunk X**: Horizontal chunk coordinate
+    - **Chunk Y**: Vertical chunk coordinate
+
+    These coordinates are saved with the map and used by the server to position the chunk in the world.
+  </Step>
+</Steps>
+
+## Creating a Map
+
+<Steps>
+  <Step title="Place Ground Tiles">
+    1. Switch to the **Tiles** tab in the Selector panel
+    2. Click on a tile type (e.g., "grass")
+    3. Click on the grid to place tiles
+    4. Fill the entire 16x16 grid
+
+    <Warning>
+      All tiles must be filled before saving. The editor will show an error if any tiles are empty.
+    </Warning>
+
+    **Quick Fill Tip:**
+    
+    Use the **Set all empty tiles to currently selected** button to quickly fill all empty tiles with your current selection.
+  </Step>
+
+  <Step title="Place Objects">
+    1. Switch to the **Objs** tab in the Selector panel
+    2. Click on an object type
+    3. Click on the grid to place objects
+
+    Objects are optional - empty object slots are saved as ID 0 (no object).
+
+    **Eraser Mode:**
+    
+    Click **Enable Eraser** to remove objects from the grid.
+  </Step>
+
+  <Step title="Save the Map">
+    1. Ensure Chunk X and Y are set
+    2. Click **Save Map**
+    3. Choose a location and filename (`.grpgmap` extension)
+
+    The map is saved in GRPG's binary format, ready to be loaded by the server.
+  </Step>
+</Steps>
+
+## Loading Existing Maps
+
+To edit an existing map:
+
+<Steps>
+  <Step title="Load Assets First">
+    Load your textures, tiles, and objects using the control buttons.
+  </Step>
+
+  <Step title="Load Map File">
+    1. Click **Load Map**
+    2. Select a `.grpgmap` file
+
+    The editor loads:
+    - Chunk coordinates (auto-filled in the controls)
+    - All tiles and their positions
+    - All objects and their positions
+  </Step>
+
+  <Step title="Edit and Save">
+    Make your changes and click **Save Map** to overwrite or save as a new file.
+  </Step>
+</Steps>
+
+## Map File Format
+
+GRPG map files (`.grpgmap`) use a binary format defined in `data-go/grpgmap/`:
+
+```go
+type Header struct {
+    Magic  [8]byte  // "GRPGMAP\x00" - File signature
+    ChunkX uint16   // Chunk X coordinate
+    ChunkY uint16   // Chunk Y coordinate
+}
+```
+
+The file structure:
+1. **Header** (12 bytes) - Magic bytes + chunk coordinates
+2. **Tiles** (512 bytes) - 256 tiles × 2 bytes each (uint16 tile ID)
+3. **Objects** (512 bytes) - 256 objects × 2 bytes each (uint16 object ID, 0 = empty)
+
+Total file size: **1,036 bytes** per chunk
+
+## Editor Controls Reference
+
+### Control Panel Buttons
+
+| Button | Description |
+|--------|-------------|
+| **Load Textures** | Load `.grpgtex` file with texture data |
+| **Load Objs** | Load `.grpgobj` file with object definitions |
+| **Load Tiles** | Load `.grpgtile` file with tile definitions |
+| **Save Map** | Export current chunk to `.grpgmap` file |
+| **Load Map** | Import existing `.grpgmap` file for editing |
+| **Set all empty tiles to currently selected** | Fill all unfilled tiles with selected tile |
+| **Clear Grid** | Reset all tiles and objects to empty |
+| **Enable Eraser** | Switch to eraser mode for removing objects |
+
+### Keyboard Shortcuts
+
+Currently, the editor uses mouse-only controls. Click-based workflow:
+
+1. Select tile/object from the selector panel
+2. Click on grid cells to place
+3. Use eraser mode to remove objects
+
+## Advanced Techniques
+
+### Creating Multi-Chunk Worlds
+
+<Steps>
+  <Step title="Plan Your World Grid">
+    Design your world on paper or in a spreadsheet:
+    
+    ```
+    Chunk Grid:
+    (0,1) (1,1) (2,1)  <- Northern chunks
+    (0,0) (1,0) (2,0)  <- Southern chunks
+    ```
+  </Step>
+
+  <Step title="Create Each Chunk">
+    For each chunk:
+    1. Set the chunk coordinates
+    2. Design the chunk (consider how it connects to neighbors)
+    3. Save as `chunk_X_Y.grpgmap`
+  </Step>
+
+  <Step title="Ensure Seamless Borders">
+    When creating adjacent chunks, make sure border tiles match:
+    
+    - Chunk (0,0) right edge should align with chunk (1,0) left edge
+    - Chunk (0,0) top edge should align with chunk (0,1) bottom edge
+  </Step>
+</Steps>
+
+### Patterns and Templates
+
+Create reusable chunk templates:
+
+1. **Town Template** - Paths, buildings, NPCs
+2. **Forest Template** - Trees, berry bushes, natural objects
+3. **Dungeon Template** - Stone walls, doors, enemies
+
+Save these as separate files and use them as starting points for new chunks.
+
+### Object Density Guidelines
+
+For optimal performance and gameplay:
+
+- **Towns**: 20-40 objects per chunk (buildings, NPCs, decorations)
+- **Wilderness**: 5-15 objects per chunk (trees, resource nodes)
+- **Dungeons**: 30-50 objects per chunk (walls, enemies, loot)
+
+<Warning>
+  While each chunk supports 256 object slots, keeping density reasonable improves both performance and gameplay experience.
+</Warning>
+
+## Map Editor Source Reference
+
+The map editor is built with [giu](https://github.com/AllenDang/giu), a Go immediate-mode GUI library:
+
+- `map-editor/main.go:16` - Entry point and UI loop
+- `map-editor/grid.go` - Grid rendering and interaction
+- `map-editor/selector.go` - Tile/object selection panel
+- `map-editor/map.go:12` - Save/load functionality
+- `map-editor/controls.go` - Control panel buttons
+
+### Customizing the Editor
+
+The editor source is designed to be modifiable. Common customizations:
+
+**Change grid size** (requires changing chunk format):
+```go map-editor/grid.go
+const gridSize = 16  // Change to different size
+```
+
+**Modify window size**:
+```go map-editor/main.go:17
+wnd := g.NewMasterWindow("GRPG Map Editor", 1640, 1200, ...)
+```
+
+**Add custom validation**:
+```go map-editor/map.go:12
+func SaveMap() {
+    // Add custom validation logic here
+    // ...
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Can't save map: 'Both Chunk X & Chunk Y must be set'">
+    Enter numeric values for both Chunk X and Chunk Y in the controls panel. Both fields default to -1 and must be set to valid coordinates (can be 0 or positive).
+  </Accordion>
+
+  <Accordion title="Can't save map: 'All tiles must be filled in'">
+    The editor found empty tiles in your grid. Either:
+    
+    - Manually place tiles in all empty cells
+    - Select a tile and click **Set all empty tiles to currently selected**
+  </Accordion>
+
+  <Accordion title="Tiles/Objects don't show textures">
+    Load order matters:
+    
+    1. Load **Textures** first (`.grpgtex`)
+    2. Load **Tiles** (`.grpgtile`)
+    3. Load **Objects** (`.grpgobj`)
+    
+    If textures still don't appear, ensure your tile/object manifests reference valid texture names.
+  </Accordion>
+
+  <Accordion title="Loaded map has wrong chunk coordinates">
+    The map file stores chunk coordinates in its header. When you load a map, the editor automatically populates the Chunk X/Y fields from the file.
+    
+    To move a chunk to new coordinates:
+    1. Load the map
+    2. Change Chunk X/Y values
+    3. Save as a new file
+  </Accordion>
+
+  <Accordion title="Objects disappear when loading map">
+    Ensure the same object file (`.grpgobj`) is loaded when editing. If object IDs don't match between your current object file and the saved map, objects may not render correctly.
+  </Accordion>
+</AccordionGroup>
+
+## Map Loading in the Server
+
+Maps you create are loaded by the server at runtime. The server:
+
+1. Reads the chunk coordinates from the header
+2. Loads tiles and objects into the game world
+3. Positions the chunk at the correct world coordinates
+4. Handles chunk loading/unloading based on player positions
+
+See `data-go/grpgmap/grpgmap.go` for the loading implementation.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Creating Content" icon="wand-magic-sparkles" href="/guides/creating-content">
+    Add interactive behavior to objects on your map
+  </Card>
+  <Card title="Custom Objects" icon="cube" href="/guides/custom-objects">
+    Create new object types to place on your maps
+  </Card>
+</CardGroup>

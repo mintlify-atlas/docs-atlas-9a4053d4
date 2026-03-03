@@ -1,0 +1,243 @@
+---
+title: 'Data Packer'
+description: 'CLI tool for packing GRPG game assets into binary formats'
+---
+
+## Overview
+
+The **Data Packer** (`grpgpack`) is a command-line tool that converts game asset manifests into optimized binary formats used by the GRPG engine. It supports packing textures, tiles, objects, NPCs, and items.
+
+## Installation
+
+Build the data packer from source:
+
+```bash
+cd ~/workspace/source/data-packer
+go build -o grpgpack
+```
+
+## Commands
+
+The data packer provides five subcommands for packing different asset types:
+
+### tex - Pack Textures
+
+Packs texture assets from a manifest file into a `.grpgtex` binary file.
+
+**Usage:**
+```bash
+grpgpack tex -m <manifest> [-o <output>]
+```
+
+**Flags:**
+- `-m, --manifest` (required): Path to the texture manifest file
+- `-o, --output` (optional): Output file path (default: `textures.grpgtex`)
+
+**Example:**
+```bash
+grpgpack tex -m textures_manifest.gcfg -o textures.grpgtex
+```
+
+**Manifest Format:**
+```gcfg
+[Texture] {
+    name = "grass_tex"
+    id = 1
+    path = "assets/grass_texture.png"
+}
+
+[Texture] {
+    name = "still_water"
+    id = 2
+    path = "assets/stone_texture.png"
+}
+```
+
+### tile - Pack Tiles
+
+Packs tile definitions from a manifest file into a `.grpgtile` binary file. Tiles reference textures from a `.grpgtex` file.
+
+**Usage:**
+```bash
+grpgpack tile -m <manifest> -t <textures> [-o <output>]
+```
+
+**Flags:**
+- `-m, --manifest` (required): Path to the tile manifest file
+- `-t, --textures` (required): Path to the `.grpgtex` file
+- `-o, --output` (optional): Output file path (default: `tiles.grpgtile`)
+
+**Example:**
+```bash
+grpgpack tile -m tiles_manifest.gcfg -t textures.grpgtex -o tiles.grpgtile
+```
+
+**Manifest Format:**
+```gcfg
+[Tile] {
+    name = "grass"
+    id = 1
+    tex_name = "grass_tex"
+}
+
+[Tile] {
+    name = "water"
+    id = 2
+    tex_name = "still_water"
+}
+```
+
+### obj - Pack Objects
+
+Packs object definitions from a manifest file into a `.grpgobj` binary file. Objects can have multiple textures, flags, and interaction properties.
+
+**Usage:**
+```bash
+grpgpack obj -m <manifest> -t <textures> [-o <output>]
+```
+
+**Flags:**
+- `-m, --manifest` (required): Path to the object manifest file
+- `-t, --textures` (required): Path to the `.grpgtex` file
+- `-o, --output` (optional): Output file path (default: `objs.grpgobj`)
+
+**Example:**
+```bash
+grpgpack obj -m objects_manifest.gcfg -t textures.grpgtex -o objs.grpgobj
+```
+
+**Manifest Format:**
+```gcfg
+[Obj] {
+    name = "water_s"
+    id = 1
+    flags = []
+    textures = ["still_water"]
+    interact_text = ""
+}
+
+[Obj] {
+    name = "i_water"
+    id = 2
+    flags = ["STATE", "INTERACT"]
+    textures = ["still_water", "grass_tex"]
+    interact_text = "Interact"
+}
+```
+
+**Available Flags:**
+- `STATE`: Object has multiple states
+- `INTERACT`: Object can be interacted with
+
+### npc - Pack NPCs
+
+Packs NPC definitions from a manifest file into a `.grpgnpc` binary file.
+
+**Usage:**
+```bash
+grpgpack npc -m <manifest> -t <textures> [-o <output>]
+```
+
+**Flags:**
+- `-m, --manifest` (required): Path to the NPC manifest file
+- `-t, --textures` (required): Path to the `.grpgtex` file
+- `-o, --output` (optional): Output file path (default: `items.grpgitem`)
+
+**Example:**
+```bash
+grpgpack npc -m npcs_manifest.gcfg -t textures.grpgtex -o npcs.grpgnpc
+```
+
+**Manifest Format:**
+```gcfg
+[Npc] {
+    name = "corey"
+    id = 1
+    texture = "still_water"
+}
+
+[Npc] {
+    name = "grian"
+    id = 2
+    texture = "grass_tex"
+}
+```
+
+### item - Pack Items
+
+Packs item definitions from a manifest file into a `.grpgitem` binary file.
+
+**Usage:**
+```bash
+grpgpack item -m <manifest> -t <textures> [-o <output>]
+```
+
+**Flags:**
+- `-m, --manifest` (required): Path to the item manifest file
+- `-t, --textures` (required): Path to the `.grpgtex` file
+- `-o, --output` (optional): Output file path (default: `items.grpgitem`)
+
+**Example:**
+```bash
+grpgpack item -m items_manifest.gcfg -t textures.grpgtex -o items.grpgitem
+```
+
+**Manifest Format:**
+```gcfg
+[Item] {
+    name = "berries"
+    id = 1
+    texture = "grass_tex"
+}
+
+[Item] {
+    name = "potion"
+    id = 2
+    texture = "potion_tex"
+}
+```
+
+## Workflow
+
+<Steps>
+  <Step title="Create Texture Manifest">
+    Define all textures in a `.gcfg` manifest file with unique IDs and paths to PNG files.
+  </Step>
+  
+  <Step title="Pack Textures">
+    Run `grpgpack tex` to generate the `.grpgtex` binary file.
+  </Step>
+  
+  <Step title="Create Asset Manifests">
+    Define tiles, objects, NPCs, or items in separate manifest files, referencing texture names from the texture manifest.
+  </Step>
+  
+  <Step title="Pack Assets">
+    Run the appropriate `grpgpack` command (tile/obj/npc/item) with the asset manifest and the `.grpgtex` file.
+  </Step>
+</Steps>
+
+## Common Errors
+
+<Warning>
+  **No manifest file provided**: You must specify a manifest file with the `-m` flag.
+</Warning>
+
+<Warning>
+  **No textures file provided**: Commands other than `tex` require a `.grpgtex` file specified with the `-t` flag.
+</Warning>
+
+## Source Code
+
+The data packer source code is located at:
+```
+~/workspace/source/data-packer/
+```
+
+Key files:
+- `main.go:20` - CLI command definitions
+- `textures/cmd.go:18` - Texture packing implementation
+- `tiles/cmd.go:13` - Tile packing implementation
+- `objs/cmd.go:13` - Object packing implementation
+- `npcs/cmd.go:13` - NPC packing implementation
+- `items/cmd.go:13` - Item packing implementation
