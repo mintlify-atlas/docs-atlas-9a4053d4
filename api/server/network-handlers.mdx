@@ -456,6 +456,46 @@ Sends updated skill levels and XP.
 
 ---
 
+### NpcMoves (0x09)
+
+```go
+Opcode: 0x09
+```
+
+Notifies clients of NPC movement in a chunk.
+
+**Payload:**
+
+<ParamField path="packetLen" type="uint16">
+  Total packet length (2 bytes)
+</ParamField>
+
+<ParamField path="moveCount" type="uint32">
+  Number of moves (4 bytes)
+</ParamField>
+
+For each move:
+
+<ParamField path="fromX" type="uint32">
+  Source X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="fromY" type="uint32">
+  Source Y coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="toX" type="uint32">
+  Destination X coordinate (4 bytes)
+</ParamField>
+
+<ParamField path="toY" type="uint32">
+  Destination Y coordinate (4 bytes)
+</ParamField>
+
+**Source:** `server-go/network/s2c/npc_moves.go:8-26`
+
+---
+
 ## Packet Registry
 
 ### Client-to-Server
